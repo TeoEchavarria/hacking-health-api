@@ -1,0 +1,162 @@
+name: Deploy to EC2 🚀
+
+on:
+  push:
+    branches:
+      - "main"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}     # ej: us-east-2
+      EC2_SG_ID: ${{ secrets.EC2_SG_ID }}       # ej: sg-0008422af96586311
+
+    steps:
+      - name: Checkout current branch ✅
+        uses: actions/checkout@v2
+
+      # (Opción simple con access keys) - si usas OIDC, reemplaza este bloque por configure-aws-credentials con role-to-assume
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Check AWS CLI
+        run: aws --version
+
+      - name: Allow runner IP on SG (open SSH 22 temporarily) 🔓
+        id: allow_ssh
+        shell: bash
+        run: |
+          set -e
+          MYIP="$(curl -s https://checkip.amazonaws.com)"
+          echo "runner_ip=${MYIP}" >> $GITHUB_OUTPUT
+          CIDR="${MYIP}/32"
+          echo "🧭 Runner public IP: $CIDR"
+          # Intentamos autorizar; si ya existe, continuamos
+          aws ec2 authorize-security-group-ingress \
+            --group-id "${EC2_SG_ID}" \
+            --protocol tcp \
+            --port 22 \
+            --cidr  "${CIDR}" \
+            --region "${AWS_REGION}" || echo "⚠️  Regla ya existía (ok)"
+
+      - name: Set up SSH key 🔑
+        env:
+          SSH_KEY:   ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST:  ${{ secrets.EC2_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Build Docker image 🐳
+        run: |
+          cd api
+          docker build -t api-health:latest .
+          cd ..
+
+      - name: Save Docker image 💾
+        run: |
+          docker save api-health:latest | gzip > api-health.tar.gz
+
+      - name: Create .env file dynamically 🧨
+        env:
+          APP_HOST: ${{ secrets.APP_HOST }}
+          APP_PORT: ${{ secrets.APP_PORT }}
+          APP_DEBUG: ${{ secrets.APP_DEBUG }}
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          MONGO_DB: ${{ secrets.MONGO_DB }}
+          FCM_PROJECT_ID: ${{ secrets.FCM_PROJECT_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          echo "APP_HOST=${APP_HOST}" > .env
+          echo "APP_PORT=${APP_PORT}" >> .env
+          echo "APP_DEBUG=${APP_DEBUG}" >> .env
+          echo "MONGO_URI=${MONGO_URI}" >> .env
+          echo "MONGO_DB=${MONGO_DB}" >> .env
+          echo "FCM_PROJECT_ID=${FCM_PROJECT_ID}" >> .env
+          echo "OPENAI_API_KEY=${OPENAI_API_KEY}" >> .env
+          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> .env
+          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> .env
+          echo "AWS_S3_BUCKET=${AWS_S3_BUCKET}" >> .env
+
+      - name: Create service-account.json file 🔐
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
+        run: |
+          echo "${SERVICE_ACCOUNT_JSON}" > service-account.json
+
+      - name: Copy files to EC2 🚙
+        env:
+          EC2_HOST:     ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+        run: |
+          echo "Connecting to: ${EC2_USERNAME}@${EC2_HOST}"
+          ssh -o StrictHostKeyChecking=no "${EC2_USERNAME}@${EC2_HOST}" "mkdir -p /home/ec2-user/api-health"
+          scp -o StrictHostKeyChecking=no api-health.tar.gz "${EC2_USERNAME}@${EC2_HOST}:/home/ec2-user/api-health/"
+          scp -o StrictHostKeyChecking=no .env "${EC2_USERNAME}@${EC2_HOST}:/home/ec2-user/api-health/"
+          scp -o StrictHostKeyChecking=no service-account.json "${EC2_USERNAME}@${EC2_HOST}:/home/ec2-user/api-health/"
+
+      - name: Deploy on EC2 🚀
+        env:
+          EC2_HOST:     ${{ secrets.EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+        run: |
+          ssh -o StrictHostKeyChecking=no "${EC2_USERNAME}@${EC2_HOST}" << 'EOF'
+            cd /home/ec2-user/api-health
+            echo "🛑 Stopping existing container..."
+            sudo docker stop api-health 2>/dev/null || true
+            sudo docker rm api-health 2>/dev/null || true
+            echo "🗑️  Removing old images..."
+            sudo docker rmi api-health:latest 2>/dev/null || true
+            echo "📦 Loading new Docker image..."
+            gunzip -c api-health.tar.gz | sudo docker load
+            echo "🚀 Starting new container..."
+            sudo docker run -d \
+              --name api-health \
+              --restart always \
+              -p 8080:8080 \
+              --env-file .env \
+              -v /home/ec2-user/api-health/service-account.json:/app/service-account.json:ro \
+              api-health:latest
+            echo "✅ Container status:"
+            sudo docker ps | grep api-health || true
+            echo "📋 Recent logs:"
+            sudo docker logs --tail=50 api-health || true
+            echo "🧹 Cleaning up old Docker images..."
+            sudo docker image prune -f
+            echo "✅ Deployment completed!"
+          EOF
+
+      - name: Revoke runner IP from SG (close SSH) 🔒
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${{ steps.allow_ssh.outputs.runner_ip }}" ]; then
+            CIDR="${{ steps.allow_ssh.outputs.runner_ip }}/32"
+            echo "Revoking $CIDR from ${EC2_SG_ID}..."
+            aws ec2 revoke-security-group-ingress \
+              --group-id "${EC2_SG_ID}" \
+              --protocol tcp \
+              --port 22 \
+              --cidr  "${CIDR}" \
+              --region "${AWS_REGION}" || echo "⚠️  No se pudo revocar (tal vez ya no existía)"
+          else
+            echo "No runner_ip output; nothing to revoke."
+          fi
+
+      - name: Clean up files 🧹
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa
+          rm -f api-health.tar.gz
+          rm -f .env
+          rm -f service-account.json
