@@ -1,8 +1,8 @@
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from datetime import datetime
 
-class SensorRecord(BaseModel):
+class SensorRecordInput(BaseModel):
     deviceId: str
     timestamp: int
     x: float
@@ -10,6 +10,10 @@ class SensorRecord(BaseModel):
     z: float
     # Optional fields for metadata
     source: str = "watch"
-    
+
+class SensorRecordDB(SensorRecordInput):
+    userId: str
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+
 class SensorBatch(BaseModel):
-    records: List[SensorRecord]
+    records: List[SensorRecordInput]
