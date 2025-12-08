@@ -144,6 +144,19 @@ async def refresh(request: RefreshRequest, db=Depends(get_database)):
         expiry=expiryDate.isoformat()
     )
 
+@router.post("/logout", response_model=SuccessResponse)
+async def logout(request: RefreshRequest, db=Depends(get_database)):
+    refresh_token = request.refresh
+    
+    # Invalidate session by clearing tokens
+    # Using $unset to remove the fields completely
+    await db.users.update_one(
+        {'refresh': refresh_token}, 
+        {"$unset": {'token': "", 'refresh': "", 'expiry': ""}}
+    )
+    
+    return SuccessResponse(success=True)
+
 @router.delete("/revoke", response_model=SuccessResponse)
 async def revoke(user_id: str = Depends(verify_token), db=Depends(get_database)):
     user = await db.users.find_one({'_id': ObjectId(user_id)})
