@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, conlist, validator
+from pydantic import BaseModel, Field, validator
 from typing import List
 from datetime import datetime
 
@@ -15,7 +15,7 @@ class SensorRecordInput(BaseModel):
         return v
 
 class SensorBatch(BaseModel):
-    records: conlist(SensorRecordInput, min_items=1)
+    records: List[SensorRecordInput] = Field(min_length=1)
 
 class SensorBatchDB(BaseModel):
     userId: str
