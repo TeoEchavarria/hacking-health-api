@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body, Depends
-from src.domains.health.schemas import SensorBatch, SensorRecordDB
+from src.domains.health.schemas import SensorBatch, SensorBatchDB
 from src._config.logger import get_logger
 from src.core.database import get_database
 from src.domains.auth.routes import verify_token
@@ -21,33 +21,38 @@ async def upload_sensor_data(
     """
     Upload a batch of sensor data records.
     Authenticated user is enforced.
+    MongoDB stores **one document per batch**, not per-sample.
     """
     try:
-        logger.info(f"Received batch of {len(batch.records)} records from user {user_id}")
-        
+        # Extra guard, though pydantic handles min_items
         if not batch.records:
             return {"status": "success", "count": 0}
+
+        logger.info(
+            f"Received batch with {len(batch.records)} records from user {user_id}. "
+            f"ts_range=[{batch.records[0].timestamp}..{batch.records[-1].timestamp}]"
+        )
+        
+        # Build DB document: userId injected from token
+        db_doc = SensorBatchDB(
+            userId=user_id,
+            records=batch.records
+        )
             
-        # TODO: Validate deviceId belongs to user_id
-        # For now, we trust the auth token determines the user, 
-        # and we associate the deviceId in the record with this user.
+        # Insert into SINGLE sensor_batches collection
+        # One document per batch
+        result = await db.sensor_batches.insert_one(db_doc.model_dump())
         
-        # Transform to DB records with userId injected
-        records_dict = []
-        for record in batch.records:
-            # Create DB model
-            db_record = SensorRecordDB(
-                **record.model_dump(),
-                userId=user_id
-            )
-            records_dict.append(db_record.model_dump())
-            
-        # Insert into SINGLE sensor_data collection
-        result = await db.sensor_data.insert_many(records_dict)
+        logger.info(
+            f"Inserted batch document {result.inserted_id} "
+            f"for user {user_id} with {len(batch.records)} records"
+        )
         
-        logger.info(f"Inserted {len(result.inserted_ids)} records for user {user_id}")
-        
-        return {"status": "success", "count": len(result.inserted_ids)}
+        return {
+            "status": "success", 
+            "batchId": str(result.inserted_id),
+            "count": len(batch.records)
+        }
     except Exception as e:
         logger.error(f"Error processing sensor data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
