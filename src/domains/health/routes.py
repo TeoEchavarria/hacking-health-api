@@ -2,10 +2,12 @@ from fastapi import APIRouter, HTTPException, Body, Depends
 from src.domains.health.schemas import SensorBatch, SensorBatchDB
 from src._config.logger import get_logger
 from src.core.database import get_database
-from src.domains.auth.routes import verify_token
 from typing import Dict
 
 logger = get_logger(__name__)
+
+# Default user ID for unauthenticated uploads (dev/testing mode)
+DEV_USER_ID = "anonymous-dev-user"
 
 router = APIRouter(
     prefix="/health",
@@ -15,12 +17,11 @@ router = APIRouter(
 @router.post("/sensor-data")
 async def upload_sensor_data(
     batch: SensorBatch = Body(...), 
-    user_id: str = Depends(verify_token),
     db=Depends(get_database)
 ):
     """
     Upload a batch of sensor data records.
-    Authenticated user is enforced.
+    PUBLIC ENDPOINT - No authentication required (dev/testing mode).
     MongoDB stores **one document per batch**, not per-sample.
     """
     try:
@@ -28,12 +29,15 @@ async def upload_sensor_data(
         if not batch.records:
             return {"status": "success", "count": 0}
 
+        # Use anonymous dev user since auth is disabled
+        user_id = DEV_USER_ID
+
         logger.info(
             f"Received batch with {len(batch.records)} records from user {user_id}. "
             f"ts_range=[{batch.records[0].timestamp}..{batch.records[-1].timestamp}]"
         )
         
-        # Build DB document: userId injected from token
+        # Build DB document: userId is now a fixed dev user
         db_doc = SensorBatchDB(
             userId=user_id,
             records=batch.records

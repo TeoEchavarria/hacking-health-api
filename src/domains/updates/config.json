@@ -1,0 +1,10 @@
+{
+    "mobile": {
+        "version": "1.0.0",
+        "url": "https://github.com/TeoEchavarria/app/releases/download/v1.0/mobile.apk"
+    },
+    "watch": {
+        "version": "1.0.0",
+        "url": "https://github.com/TeoEchavarria/app/releases/download/v1.0/watch.apk"
+    }
+}
