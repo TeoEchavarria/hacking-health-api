@@ -20,8 +20,8 @@ def load_config():
             return json.load(f)
     except json.JSONDecodeError:
         return {
-            "mobile": {"version": "0.0.0", "url": ""},
-            "watch": {"version": "0.0.0", "url": ""}
+            "mobile": {"version": "1.0.0", "url": "https://github.com/2wiks/ss0-web-health-tech/blob/main/public/downloads/hh_1_0_0.apk"},
+            "watch": {"version": "1.0.0", "url": "https://github.com/2wiks/ss0-web-health-tech/blob/main/public/downloads/hh_watch_1_0_0.apk"}
         }
 
 @router.get("")
