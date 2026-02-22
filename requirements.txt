@@ -31,3 +31,6 @@ python-json-logger==2.0.7
 # Environment
 python-dotenv==1.0.0
 
+# OpenAI
+openai>=1.0.0
+
