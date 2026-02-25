@@ -7,6 +7,7 @@ from src.domains.appointments.routes import router as appointments_router
 from src.domains.updates.routes import router as updates_router
 from src.domains.kitchen.routes import router as kitchen_router
 from src.domains.user.routes import user_router, users_router
+from src.domains.interests.routes import router as interests_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -59,6 +60,7 @@ app.include_router(updates_router)
 app.include_router(kitchen_router, prefix="/kitchen", tags=["Kitchen"])
 app.include_router(user_router)
 app.include_router(users_router)
+app.include_router(interests_router)
 
 @app.get("/")
 async def root():
