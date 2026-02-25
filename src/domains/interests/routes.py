@@ -43,3 +43,26 @@ async def register_interest(
     except Exception as e:
         logger.error(f"Error registering interest: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/", response_model=list[InterestResponse])
+async def list_interests(db=Depends(get_database)):
+    """
+    Lista todas las personas interesadas en el producto.
+    """
+    try:
+        cursor = db.interests.find({})
+        results = []
+        async for doc in cursor:
+            results.append(
+                InterestResponse(
+                    id=str(doc["_id"]),
+                    name=doc["name"],
+                    email=doc["email"],
+                    phone=doc.get("phone"),
+                )
+            )
+        return results
+    except Exception as e:
+        logger.error(f"Error listing interests: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
