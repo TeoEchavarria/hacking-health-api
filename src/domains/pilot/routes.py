@@ -52,4 +52,30 @@ async def register_pilot(
     except Exception as e:
         logger.error(f"Error registering pilot interest: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+        
 
+@router.get("/", response_model=list[PilotResponse])
+async def list_pilot_registrations(
+    db=Depends(get_database),
+):
+    """
+    Lista todas las personas registradas en la prueba piloto.
+    """
+    try:
+        cursor = db.pilot_interests.find({})
+        results: list[PilotResponse] = []
+        async for doc in cursor:
+            results.append(
+                PilotResponse(
+                    id=str(doc["_id"]),
+                    full_name=doc["full_name"],
+                    email=doc.get("email"),
+                    phone=doc.get("phone"),
+                    city=doc["city"],
+                    elder_age=doc["elder_age"],
+                )
+            )
+        return results
+    except Exception as e:
+        logger.error(f"Error listing pilot registrations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
