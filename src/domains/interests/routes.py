@@ -24,21 +24,17 @@ async def register_interest(
 ):
     """
     Registra una persona interesada en el producto.
-    Guarda nombre, email y celular (opcional) en MongoDB.
+    Solo solicita y almacena el email en MongoDB.
     """
     try:
         doc = {
-            "name": body.name,
             "email": body.email,
-            "phone": body.phone,
             "created_at": datetime.now(timezone.utc),
         }
         result = await db.interests.insert_one(doc)
         return InterestResponse(
             id=str(result.inserted_id),
-            name=body.name,
             email=body.email,
-            phone=body.phone,
         )
     except Exception as e:
         logger.error(f"Error registering interest: {e}", exc_info=True)
@@ -57,9 +53,7 @@ async def list_interests(db=Depends(get_database)):
             results.append(
                 InterestResponse(
                     id=str(doc["_id"]),
-                    name=doc["name"],
                     email=doc["email"],
-                    phone=doc.get("phone"),
                 )
             )
         return results
