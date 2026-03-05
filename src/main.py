@@ -9,6 +9,7 @@ from src.domains.kitchen.routes import router as kitchen_router
 from src.domains.user.routes import user_router, users_router
 from src.domains.interests.routes import router as interests_router
 from src.domains.pilot.routes import router as pilot_router
+from src.domains.sense.routes import router as sense_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -30,7 +31,6 @@ async def startup_db_client():
     database = db.get_db()
     logger = get_logger(__name__)
     try:
-        await database.appointments.create_index("_id", unique=True)
         await database.appointments.create_index("datetime")
         await database.appointments.create_index([("datetime", 1), ("status", 1)])
     except Exception as e:
@@ -63,6 +63,7 @@ app.include_router(user_router)
 app.include_router(users_router)
 app.include_router(interests_router)
 app.include_router(pilot_router)
+app.include_router(sense_router)
 
 @app.get("/")
 async def root():
