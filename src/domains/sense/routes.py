@@ -2,9 +2,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status, Body
 
 from src._config.logger import get_logger
+from src._config.settings import settings
 from src.core.database import get_database
 from src.core.security import get_password_hash, verify_password, create_token
 from src.domains.sense.schemas import (
@@ -12,9 +14,13 @@ from src.domains.sense.schemas import (
     DeviceRegistrationResponse,
     DeviceTokenRequest,
     DeviceTokenResponse,
+    DeviceListResponse,
+    DeviceListItem,
     AlertsResponse,
     AlertAckRequest,
     AlertAckResponse,
+    CreateAlertRequest,
+    CreateAlertResponse,
     DeviceEventsRequest,
     DeviceEventsResponse,
     HeartbeatRequest,
@@ -26,7 +32,24 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/v1", tags=["sense-devices"])
 
 
-async def _get_device_by_token(authorization: Optional[str], db):
+async def _get_device_by_token(
+    authorization: Optional[str], db, device_id: Optional[str] = None
+):
+    # En local/dev: si no hay token pero sí device_id en la ruta, usar ese dispositivo
+    if settings.DEBUG and not authorization and device_id:
+        try:
+            device = await db.devices.find_one({"_id": ObjectId(device_id)})
+            if device:
+                return device
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="device not found"
+            )
+        except (TypeError, ValueError, InvalidId):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="invalid device_id: must be a 24-character hex string",
+            )
+
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="no token provided"
@@ -65,6 +88,69 @@ async def verify_device_token(
     """
     device = await _get_device_by_token(authorization, db)
     return str(device["_id"])
+
+
+@router.get(
+    "/devices",
+    response_model=DeviceListResponse,
+)
+async def list_devices(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    db=Depends(get_database),
+):
+    """
+    List all registered Sense devices. Returns only safe fields (no secrets or tokens).
+    Optional query: status=active|suspended|decommissioned.
+    """
+    query = {}
+    if status_filter:
+        query["status"] = status_filter
+
+    total = await db.devices.count_documents(query)
+    # Project only safe fields (_id is always included unless excluded)
+    projection = {
+        "hardware_id": 1,
+        "device_model": 1,
+        "software_version": 1,
+        "status": 1,
+        "registered_at": 1,
+        "last_seen_at": 1,
+        "locale": 1,
+        "time_zone": 1,
+        "os_version": 1,
+    }
+    cursor = (
+        db.devices.find(query, projection)
+        .sort("registered_at", -1)
+        .skip(offset)
+        .limit(limit)
+    )
+
+    devices = []
+    async for doc in cursor:
+        devices.append(
+            DeviceListItem(
+                device_id=str(doc["_id"]),
+                hardware_id=doc.get("hardware_id", ""),
+                device_model=doc.get("device_model", ""),
+                software_version=doc.get("software_version", ""),
+                status=doc.get("status", "active"),
+                registered_at=doc.get("registered_at"),
+                last_seen_at=doc.get("last_seen_at"),
+                locale=doc.get("locale"),
+                time_zone=doc.get("time_zone"),
+                os_version=doc.get("os_version"),
+            )
+        )
+
+    return DeviceListResponse(
+        devices=devices,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(
@@ -178,7 +264,7 @@ async def poll_alerts(
     """
     Poll alerts for the given device. At-least-once delivery with cursor-based pagination.
     """
-    device = await _get_device_by_token(authorization, db)
+    device = await _get_device_by_token(authorization, db, device_id=device_id)
     if str(device["_id"]) != device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
@@ -231,6 +317,7 @@ async def poll_alerts(
                 "body": doc.get("body", ""),
                 "guidance": doc.get("guidance"),
                 "escalation": doc.get("escalation"),
+                "cause": doc.get("cause"),
             }
         )
 
@@ -239,6 +326,60 @@ async def poll_alerts(
         next_cursor=next_cursor,
         has_more=has_more,
         server_time=datetime.utcnow(),
+    )
+
+
+@router.post(
+    "/devices/{device_id}/alerts",
+    response_model=CreateAlertResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_alert(
+    device_id: str,
+    body: CreateAlertRequest = Body(...),
+    db=Depends(get_database),
+):
+    """
+    Create a new alert for a device. Specify the cause (causa) of the alert.
+    Typically used by the backend/analytics; no device token required.
+    """
+    try:
+        oid = ObjectId(device_id)
+    except (TypeError, ValueError, InvalidId):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invalid device_id: must be a 24-character hex string",
+        )
+    device = await db.devices.find_one({"_id": oid})
+    if not device:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="device not found"
+        )
+
+    now = datetime.utcnow()
+    doc = {
+        "device_id": device_id,
+        "patient_id": body.patient_id or "",
+        "type": body.type,
+        "severity": body.severity,
+        "status": "pending",
+        "created_at": now,
+        "valid_until": body.valid_until,
+        "title": body.title,
+        "body": body.body,
+        "guidance": body.guidance.model_dump(),
+        "escalation": body.escalation.model_dump() if body.escalation else None,
+        "cause": body.cause,
+    }
+    result = await db.alerts.insert_one(doc)
+    alert_id = str(result.inserted_id)
+
+    return CreateAlertResponse(
+        alert_id=alert_id,
+        device_id=device_id,
+        cause=body.cause,
+        status="pending",
+        created_at=now,
     )
 
 
@@ -256,7 +397,7 @@ async def acknowledge_alerts(
     """
     Acknowledge alerts for a device. Idempotent via optional Idempotency-Key.
     """
-    device = await _get_device_by_token(authorization, db)
+    device = await _get_device_by_token(authorization, db, device_id=device_id)
     if str(device["_id"]) != device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
@@ -332,7 +473,7 @@ async def post_events(
     """
     Post a batch of device events. Idempotent via Idempotency-Key and event_ids.
     """
-    device = await _get_device_by_token(authorization, db)
+    device = await _get_device_by_token(authorization, db, device_id=device_id)
     if str(device["_id"]) != device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 
@@ -401,7 +542,7 @@ async def heartbeat(
     """
     Record a device heartbeat and basic health metrics.
     """
-    device = await _get_device_by_token(authorization, db)
+    device = await _get_device_by_token(authorization, db, device_id=device_id)
     if str(device["_id"]) != device_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="forbidden")
 

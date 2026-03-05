@@ -41,6 +41,28 @@ class DeviceTokenResponse(BaseModel):
     expires_in: int
 
 
+class DeviceListItem(BaseModel):
+    """Safe device fields only; no secrets or tokens."""
+
+    device_id: str
+    hardware_id: str
+    device_model: str
+    software_version: str
+    status: str
+    registered_at: datetime
+    last_seen_at: Optional[datetime] = None
+    locale: Optional[str] = None
+    time_zone: Optional[str] = None
+    os_version: Optional[str] = None
+
+
+class DeviceListResponse(BaseModel):
+    devices: List[DeviceListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 Severity = Literal["info", "moderate", "high", "urgent"]
 
 
@@ -81,6 +103,7 @@ class Alert(BaseModel):
     body: str
     guidance: AlertGuidance
     escalation: Optional[AlertEscalation] = None
+    cause: Optional[str] = None
 
 
 class AlertsResponse(BaseModel):
@@ -88,6 +111,28 @@ class AlertsResponse(BaseModel):
     next_cursor: Optional[str]
     has_more: bool
     server_time: datetime
+
+
+class CreateAlertRequest(BaseModel):
+    """Body to create a new alert. Cause describes why the alert was generated."""
+
+    cause: str = Field(..., min_length=1, max_length=512, description="Causa o motivo por el que se genera la alerta")
+    type: str = Field(..., min_length=1, max_length=64)
+    severity: Severity = "moderate"
+    title: str = Field(..., min_length=1, max_length=256)
+    body: str = Field(..., min_length=1, max_length=2048)
+    guidance: AlertGuidance
+    patient_id: Optional[str] = Field(default="", max_length=64)
+    valid_until: Optional[datetime] = None
+    escalation: Optional[AlertEscalation] = None
+
+
+class CreateAlertResponse(BaseModel):
+    alert_id: str
+    device_id: str
+    cause: str
+    status: str = "pending"
+    created_at: datetime
 
 
 class AlertAckItem(BaseModel):
