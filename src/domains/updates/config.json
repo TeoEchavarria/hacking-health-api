@@ -1,10 +1,10 @@
 {
     "mobile": {
-        "version": "1.0.3",
-        "url": "https://hacking-health-api.vercel.app//downloads/hacking-health-mobile-1.0.3.apk"
+        "version": "1.0.4",
+        "url": "https://hacking-health-api.vercel.app//downloads/hacking-health-mobile-1.0.4.apk"
     },
     "watch": {
-        "version": "1.0.1",
-        "url": "https://hacking-health-api.vercel.app//downloads/hacking-health-watch-1.0.1.apk"
+        "version": "1.0.2",
+        "url": "https://hacking-health-api.vercel.app//downloads/hacking-health-watch-1.0.2.apk"
     }
 }
