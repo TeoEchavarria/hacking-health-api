@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from src.core.database import get_database
 from src.domains.auth.routes import verify_token
-from src.domains.user.schemas import UserResponse
+from src.domains.user.schemas import UserResponse, OAuthProviderInfo
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from pydantic import BaseModel
@@ -24,11 +24,30 @@ def _user_doc_to_response(doc: dict) -> UserResponse:
         updated = updated.isoformat()
     elif not updated:
         updated = datetime.now(timezone.utc).isoformat()
+    
+    # Process OAuth providers
+    oauth_providers = []
+    for provider in doc.get("oauth_providers", []):
+        linked_at = provider.get("linked_at")
+        if isinstance(linked_at, datetime):
+            linked_at = linked_at.isoformat()
+        elif not linked_at:
+            linked_at = created
+        
+        oauth_providers.append(OAuthProviderInfo(
+            provider=provider.get("provider", ""),
+            provider_email=provider.get("provider_email", ""),
+            linked_at=linked_at
+        ))
+    
     return UserResponse(
         id=str(doc["_id"]),
         username=doc.get("username", ""),
         email=doc.get("email"),
+        email_verified=doc.get("email_verified", False),
         name=doc.get("name"),
+        profile_picture=doc.get("profile_picture"),
+        oauth_providers=oauth_providers,
         created_at=created,
         updated_at=updated,
     )

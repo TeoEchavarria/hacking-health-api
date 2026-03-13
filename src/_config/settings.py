@@ -13,7 +13,13 @@ class Settings(BaseSettings):
     
     # Security
     SECRET_KEY: str = "development_secret_key"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    
+    # OAuth Providers
+    GOOGLE_OAUTH_CLIENT_ID: Optional[str] = None
+    GITHUB_OAUTH_CLIENT_ID: Optional[str] = None
+    GITHUB_OAUTH_CLIENT_SECRET: Optional[str] = None
     
     # OpenAI
     OPENAI_API_KEY: Optional[str] = None
