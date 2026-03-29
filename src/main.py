@@ -10,6 +10,7 @@ from src.domains.user.routes import user_router, users_router
 from src.domains.interests.routes import router as interests_router
 from src.domains.pilot.routes import router as pilot_router
 from src.domains.sense.routes import router as sense_router
+from src.domains.pairing.routes import router as pairing_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -34,7 +35,17 @@ async def startup_db_client():
         await database.appointments.create_index("datetime")
         await database.appointments.create_index([("datetime", 1), ("status", 1)])
     except Exception as e:
-        logger.warning(f"Could not create indexes: {e}")
+        logger.warning(f"Could not create indexes for appointments: {e}")
+    
+    # Create indexes for pairings collection
+    try:
+        await database.pairings.create_index("code")
+        await database.pairings.create_index([("code", 1), ("status", 1)])
+        await database.pairings.create_index("patientId")
+        await database.pairings.create_index("caregiverId")
+        await database.pairings.create_index([("status", 1), ("expiresAt", 1)])
+    except Exception as e:
+        logger.warning(f"Could not create indexes for pairings: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
@@ -64,6 +75,7 @@ app.include_router(users_router)
 app.include_router(interests_router)
 app.include_router(pilot_router)
 app.include_router(sense_router)
+app.include_router(pairing_router)
 
 @app.get("/")
 async def root():
