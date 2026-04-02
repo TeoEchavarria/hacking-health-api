@@ -11,6 +11,7 @@ from src.domains.interests.routes import router as interests_router
 from src.domains.pilot.routes import router as pilot_router
 from src.domains.sense.routes import router as sense_router
 from src.domains.pairing.routes import router as pairing_router
+from src.domains.openwearables.routes import router as openwearables_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -76,6 +77,7 @@ app.include_router(interests_router)
 app.include_router(pilot_router)
 app.include_router(sense_router)
 app.include_router(pairing_router)
+app.include_router(openwearables_router)
 
 @app.get("/")
 async def root():

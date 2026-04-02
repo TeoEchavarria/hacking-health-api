@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from src.domains.auth.schemas import (
     LoginRequest, RefreshRequest, TokenResponse, SuccessResponse,
-    OAuthTokenRequest, JWTTokenResponse, ErrorResponse
+    OAuthTokenRequest, JWTTokenResponse, ErrorResponse, OpenWearablesCredentials
 )
 from src.core.database import get_database
 from src.core.security import verify_password, get_password_hash, create_token
@@ -13,6 +13,7 @@ from src.core.jwt import (
 from src.domains.auth.oauth_providers import (
     oauth_registry, TokenVerificationError, ProviderNotFoundError
 )
+from src.domains.openwearables.services import OpenWearablesService
 from src._config.logger import get_logger
 from src._config.settings import settings
 from typing import Optional
@@ -22,6 +23,65 @@ import datetime
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["auth"])
+
+
+# =============================================================================
+# OpenWearables Integration Helper
+# =============================================================================
+
+async def get_or_create_openwearables_credentials(
+    user: dict,
+    db
+) -> Optional[OpenWearablesCredentials]:
+    """
+    Get or create OpenWearables credentials for a user.
+    
+    This function:
+    1. Checks if user already has an OW user ID
+    2. Creates OW user if not exists
+    3. Generates SDK tokens
+    4. Returns credentials for the mobile app
+    
+    Returns None if OpenWearables is not configured or fails.
+    """
+    # Skip if OpenWearables not configured
+    if not settings.OPENWEARABLES_HOST:
+        return None
+    
+    try:
+        service = OpenWearablesService()
+        user_id = str(user["_id"])
+        ow_user_id = user.get("open_wearables_user_id")
+        
+        if not ow_user_id:
+            # Create user in OpenWearables
+            ow_user = await service.create_user(
+                external_user_id=user_id,
+                email=user.get("email"),
+                first_name=user.get("name", "").split()[0] if user.get("name") else None
+            )
+            ow_user_id = ow_user["id"]
+            
+            # Store mapping in our database
+            await db.users.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"open_wearables_user_id": ow_user_id}}
+            )
+            logger.info(f"Created OpenWearables user {ow_user_id} for user {user_id}")
+        
+        # Generate SDK tokens
+        tokens = await service.create_user_token(ow_user_id)
+        
+        return OpenWearablesCredentials(
+            ow_user_id=ow_user_id,
+            ow_access_token=tokens["access_token"],
+            ow_refresh_token=tokens.get("refresh_token")
+        )
+        
+    except Exception as e:
+        # Log but don't fail the login - OW is optional
+        logger.warning(f"Failed to get OpenWearables credentials: {e}")
+        return None
 
 
 # =============================================================================
@@ -290,11 +350,15 @@ async def oauth_token_exchange(
         }}
     )
     
+    # Get OpenWearables credentials (non-blocking, optional)
+    ow_credentials = await get_or_create_openwearables_credentials(user, db)
+    
     return JWTTokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         token_type="Bearer",
-        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        open_wearables=ow_credentials
     )
 
 
@@ -341,14 +405,21 @@ async def login(request: LoginRequest, db=Depends(get_database)):
         result = await db.users.insert_one(new_user_doc)
         user_id = str(result.inserted_id)
         
+        # Get the created user for OpenWearables setup
+        new_user = await db.users.find_one({"_id": result.inserted_id})
+        
         # Generate JWT tokens
         access_token = create_access_token(user_id=user_id)
         refresh_token, expiry = create_refresh_token(user_id=user_id)
+        
+        # Get OpenWearables credentials for new user
+        ow_credentials = await get_or_create_openwearables_credentials(new_user, db)
 
         return TokenResponse(
             token=access_token,
             refresh=refresh_token,
-            expiry=expiry.isoformat()
+            expiry=expiry.isoformat(),
+            open_wearables=ow_credentials
         )
     
     # Verify password
@@ -383,10 +454,14 @@ async def login(request: LoginRequest, db=Depends(get_database)):
         {"$set": {'updated_at': now}}
     )
 
+    # Get OpenWearables credentials (non-blocking, optional)
+    ow_credentials = await get_or_create_openwearables_credentials(user, db)
+
     return TokenResponse(
         token=access_token,
         refresh=refresh_token,
-        expiry=expiry.isoformat()
+        expiry=expiry.isoformat(),
+        open_wearables=ow_credentials
     )
 
 

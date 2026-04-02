@@ -1,0 +1,1 @@
+# OpenWearables integration domain

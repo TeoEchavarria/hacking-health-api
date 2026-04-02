@@ -13,11 +13,20 @@ class RefreshRequest(BaseModel):
     refresh: str
 
 
+class OpenWearablesCredentials(BaseModel):
+    """OpenWearables SDK credentials"""
+    ow_user_id: Optional[str] = Field(default=None, description="OpenWearables user ID")
+    ow_access_token: Optional[str] = Field(default=None, description="OpenWearables access token")
+    ow_refresh_token: Optional[str] = Field(default=None, description="OpenWearables refresh token")
+
+
 class TokenResponse(BaseModel):
     """Legacy token response for backward compatibility"""
     token: str
     refresh: str
     expiry: str
+    # OpenWearables credentials (optional, included when available)
+    open_wearables: Optional[OpenWearablesCredentials] = None
 
 
 class JWTTokenResponse(BaseModel):
@@ -26,6 +35,8 @@ class JWTTokenResponse(BaseModel):
     refresh_token: str
     token_type: str = "Bearer"
     expires_in: int = Field(description="Token lifetime in seconds")
+    # OpenWearables credentials (optional, included when available)
+    open_wearables: Optional[OpenWearablesCredentials] = None
 
 
 class OAuthTokenRequest(BaseModel):
