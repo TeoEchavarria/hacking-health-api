@@ -16,6 +16,7 @@ class OpenWearablesService:
         self.host = settings.OPENWEARABLES_HOST
         self.app_id = settings.OPENWEARABLES_APP_ID
         self.app_secret = settings.OPENWEARABLES_APP_SECRET
+        logger.info(f"[OW Service] Initialized - host: {self.host}, app_id: {'set' if self.app_id else 'NOT SET'}, app_secret: {'set' if self.app_secret else 'NOT SET'}")
     
     def _get_headers(self) -> dict:
         """Get headers for API requests"""
@@ -52,25 +53,37 @@ class OpenWearablesService:
             if last_name:
                 payload["last_name"] = last_name
             
-            logger.info(f"Creating OpenWearables user for external_id: {external_user_id}")
+            url = f"{self.host}/api/v1/users"
+            logger.info(f"[OW Service] POST {url} - Creating user for external_id: {external_user_id}")
+            logger.info(f"[OW Service] Payload: {payload}")
             
-            response = await client.post(
-                f"{self.host}/api/v1/users",
-                headers=self._get_headers(),
-                json=payload
-            )
-            
-            if response.status_code == 201:
-                user = response.json()
-                logger.info(f"Created OpenWearables user: {user.get('id')}")
-                return user
-            elif response.status_code == 409:
-                # User already exists, try to find them
-                logger.info(f"User already exists, fetching by external_id")
-                return await self.get_user_by_external_id(external_user_id)
-            else:
-                logger.error(f"Failed to create OW user: {response.status_code} - {response.text}")
-                response.raise_for_status()
+            try:
+                response = await client.post(
+                    url,
+                    headers=self._get_headers(),
+                    json=payload
+                )
+                
+                logger.info(f"[OW Service] Response status: {response.status_code}")
+                logger.info(f"[OW Service] Response body: {response.text[:500] if response.text else 'empty'}")
+                
+                if response.status_code == 201:
+                    user = response.json()
+                    logger.info(f"[OW Service] Created OpenWearables user: {user.get('id')}")
+                    return user
+                elif response.status_code == 409:
+                    # User already exists, try to find them
+                    logger.info(f"[OW Service] User already exists (409), fetching by external_id")
+                    return await self.get_user_by_external_id(external_user_id)
+                else:
+                    logger.error(f"[OW Service] Failed to create OW user: {response.status_code} - {response.text}")
+                    response.raise_for_status()
+            except httpx.TimeoutException as e:
+                logger.error(f"[OW Service] Timeout creating user: {e}")
+                raise
+            except httpx.ConnectError as e:
+                logger.error(f"[OW Service] Connection error: {e}")
+                raise
     
     async def get_user_by_external_id(self, external_user_id: str) -> Optional[dict]:
         """
@@ -134,21 +147,33 @@ class OpenWearablesService:
                     "app_secret": self.app_secret
                 }
             
-            logger.info(f"Generating tokens for OW user: {user_id}")
+            url = f"{self.host}/api/v1/users/{user_id}/token"
+            logger.info(f"[OW Service] POST {url} - Generating tokens for user: {user_id}")
+            logger.info(f"[OW Service] Payload has app_id: {'yes' if 'app_id' in payload else 'no'}")
             
-            response = await client.post(
-                f"{self.host}/api/v1/users/{user_id}/token",
-                headers=self._get_headers(),
-                json=payload
-            )
-            
-            if response.status_code == 200:
-                tokens = response.json()
-                logger.info(f"Generated tokens for user {user_id}")
-                return tokens
-            else:
-                logger.error(f"Failed to generate tokens: {response.status_code} - {response.text}")
-                response.raise_for_status()
+            try:
+                response = await client.post(
+                    url,
+                    headers=self._get_headers(),
+                    json=payload
+                )
+                
+                logger.info(f"[OW Service] Response status: {response.status_code}")
+                logger.info(f"[OW Service] Response body: {response.text[:500] if response.text else 'empty'}")
+                
+                if response.status_code == 200:
+                    tokens = response.json()
+                    logger.info(f"[OW Service] Generated tokens for user {user_id} - token length: {len(tokens.get('access_token', ''))}")
+                    return tokens
+                else:
+                    logger.error(f"[OW Service] Failed to generate tokens: {response.status_code} - {response.text}")
+                    response.raise_for_status()
+            except httpx.TimeoutException as e:
+                logger.error(f"[OW Service] Timeout generating tokens: {e}")
+                raise
+            except httpx.ConnectError as e:
+                logger.error(f"[OW Service] Connection error: {e}")
+                raise
     
     async def get_user_health_data(
         self, 

@@ -44,9 +44,12 @@ async def get_or_create_openwearables_credentials(
     
     Returns None if OpenWearables is not configured or fails.
     """
+    # Log config status for debugging
+    logger.info(f"[OW] Checking OpenWearables config - HOST: {settings.OPENWEARABLES_HOST}, APP_ID: {'set' if settings.OPENWEARABLES_APP_ID else 'NOT SET'}, APP_SECRET: {'set' if settings.OPENWEARABLES_APP_SECRET else 'NOT SET'}")
+    
     # Skip if OpenWearables not properly configured
     if not settings.OPENWEARABLES_APP_SECRET or not settings.OPENWEARABLES_APP_ID:
-        logger.debug("OpenWearables not configured (missing APP_ID or APP_SECRET)")
+        logger.warning("[OW] OpenWearables not configured (missing APP_ID or APP_SECRET) - skipping")
         return None
     
     try:
@@ -54,24 +57,30 @@ async def get_or_create_openwearables_credentials(
         user_id = str(user["_id"])
         ow_user_id = user.get("open_wearables_user_id")
         
+        logger.info(f"[OW] Processing user {user_id}, existing OW user ID: {ow_user_id}")
+        
         if not ow_user_id:
             # Create user in OpenWearables
+            logger.info(f"[OW] Creating new OpenWearables user for {user_id}")
             ow_user = await service.create_user(
                 external_user_id=user_id,
                 email=user.get("email"),
                 first_name=user.get("name", "").split()[0] if user.get("name") else None
             )
             ow_user_id = ow_user["id"]
+            logger.info(f"[OW] Created OpenWearables user: {ow_user_id}")
             
             # Store mapping in our database
             await db.users.update_one(
                 {"_id": user["_id"]},
                 {"$set": {"open_wearables_user_id": ow_user_id}}
             )
-            logger.info(f"Created OpenWearables user {ow_user_id} for user {user_id}")
+            logger.info(f"[OW] Stored OW user ID mapping in database")
         
         # Generate SDK tokens
+        logger.info(f"[OW] Generating SDK tokens for OW user: {ow_user_id}")
         tokens = await service.create_user_token(ow_user_id)
+        logger.info(f"[OW] Successfully generated tokens - access_token length: {len(tokens.get('access_token', ''))}")
         
         return OpenWearablesCredentials(
             ow_user_id=ow_user_id,
@@ -81,7 +90,9 @@ async def get_or_create_openwearables_credentials(
         
     except Exception as e:
         # Log but don't fail the login - OW is optional
-        logger.warning(f"Failed to get OpenWearables credentials: {e}")
+        logger.error(f"[OW] Failed to get OpenWearables credentials: {type(e).__name__}: {e}")
+        import traceback
+        logger.error(f"[OW] Traceback: {traceback.format_exc()}")
         return None
 
 
