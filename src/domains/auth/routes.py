@@ -44,8 +44,9 @@ async def get_or_create_openwearables_credentials(
     
     Returns None if OpenWearables is not configured or fails.
     """
-    # Skip if OpenWearables not configured
-    if not settings.OPENWEARABLES_HOST:
+    # Skip if OpenWearables not properly configured
+    if not settings.OPENWEARABLES_APP_SECRET or not settings.OPENWEARABLES_APP_ID:
+        logger.debug("OpenWearables not configured (missing APP_ID or APP_SECRET)")
         return None
     
     try:

@@ -5,6 +5,9 @@ from src._config.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Timeout for OpenWearables API calls (reduced to avoid blocking login)
+OW_API_TIMEOUT = 10.0
+
 
 class OpenWearablesService:
     """Service for interacting with OpenWearables API"""
@@ -40,7 +43,7 @@ class OpenWearablesService:
         Returns:
             OpenWearables user object with 'id' (UUID)
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=OW_API_TIMEOUT) as client:
             payload = {"external_user_id": external_user_id}
             if email:
                 payload["email"] = email
@@ -79,7 +82,7 @@ class OpenWearablesService:
         Returns:
             OpenWearables user object or None
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=OW_API_TIMEOUT) as client:
             response = await client.get(
                 f"{self.host}/api/v1/users",
                 headers=self._get_headers(),
@@ -103,7 +106,7 @@ class OpenWearablesService:
         Returns:
             OpenWearables user object or None
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=OW_API_TIMEOUT) as client:
             response = await client.get(
                 f"{self.host}/api/v1/users/{user_id}",
                 headers=self._get_headers()
@@ -123,7 +126,7 @@ class OpenWearablesService:
         Returns:
             Token response with access_token and refresh_token
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=OW_API_TIMEOUT) as client:
             payload = {}
             if self.app_id and self.app_secret:
                 payload = {
@@ -166,7 +169,7 @@ class OpenWearablesService:
         Returns:
             Health data records
         """
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=OW_API_TIMEOUT) as client:
             params = {}
             if data_type:
                 params["type"] = data_type
