@@ -205,3 +205,111 @@ class HealthService:
             "next_cursor": next_cursor,
             "has_more": has_more
         }
+
+    async def get_patient_health_summary(
+        self,
+        patient_id: str
+    ) -> Dict[str, Any]:
+        """
+        Get health summary for a patient (last 24 hours).
+        
+        Args:
+            patient_id: ID of the patient
+            
+        Returns:
+            Dict with health metrics summary
+        """
+        from datetime import timedelta
+        
+        # Get patient name
+        user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
+        patient_name = user.get("name", "Usuario") if user else "Usuario"
+        
+        # Time range: last 24 hours
+        now = datetime.now(timezone.utc)
+        twenty_four_hours_ago = now - timedelta(hours=24)
+        start_ts = int(twenty_four_hours_ago.timestamp() * 1000)
+        
+        # Initialize response
+        response = {
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "heart_rate": {"available": False},
+            "steps": {"available": False},
+            "sleep": {"available": False},
+            "unavailable_metrics": [
+                {"name": "SpO2", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"},
+                {"name": "Presión Arterial", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"},
+                {"name": "Temperatura", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"}
+            ],
+            "last_sync": None,
+            "data_available": False
+        }
+        
+        # Try to get heart rate data from health_metrics collection
+        hr_data = await self.db.health_metrics.find({
+            "userId": patient_id,
+            "type": "heart_rate",
+            "timestamp": {"$gte": start_ts}
+        }).sort("timestamp", -1).to_list(length=1000)
+        
+        if hr_data:
+            hr_values = [r.get("value", 0) for r in hr_data if r.get("value")]
+            if hr_values:
+                response["heart_rate"] = {
+                    "available": True,
+                    "average": int(sum(hr_values) / len(hr_values)),
+                    "min": min(hr_values),
+                    "max": max(hr_values),
+                    "last_reading": hr_values[0],
+                    "last_reading_time": hr_data[0].get("timestamp")
+                }
+                response["data_available"] = True
+                response["last_sync"] = hr_data[0].get("timestamp")
+        
+        # Try to get steps data
+        steps_data = await self.db.health_metrics.find_one({
+            "userId": patient_id,
+            "type": "steps",
+            "timestamp": {"$gte": start_ts}
+        }, sort=[("timestamp", -1)])
+        
+        if steps_data:
+            response["steps"] = {
+                "available": True,
+                "total": steps_data.get("value", 0),
+                "last_updated": steps_data.get("timestamp")
+            }
+            response["data_available"] = True
+            if not response["last_sync"] or steps_data.get("timestamp", 0) > response["last_sync"]:
+                response["last_sync"] = steps_data.get("timestamp")
+        
+        # Try to get sleep data
+        sleep_data = await self.db.health_metrics.find_one({
+            "userId": patient_id,
+            "type": "sleep",
+            "timestamp": {"$gte": start_ts}
+        }, sort=[("timestamp", -1)])
+        
+        if sleep_data:
+            response["sleep"] = {
+                "available": True,
+                "total_minutes": sleep_data.get("value", 0),
+                "last_night": sleep_data.get("value", 0),
+                "last_updated": sleep_data.get("timestamp")
+            }
+            response["data_available"] = True
+            if not response["last_sync"] or sleep_data.get("timestamp", 0) > response["last_sync"]:
+                response["last_sync"] = sleep_data.get("timestamp")
+        
+        # If no health_metrics data, check if there's any sensor_batches data
+        # to at least know the user has synced something
+        if not response["data_available"]:
+            latest_batch = await self.db[SENSOR_BATCHES_COLLECTION].find_one(
+                {"userId": patient_id},
+                sort=[("createdAt", -1)]
+            )
+            if latest_batch:
+                response["last_sync"] = int(latest_batch["createdAt"].timestamp() * 1000)
+        
+        return response

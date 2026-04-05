@@ -2,7 +2,8 @@ from fastapi import APIRouter, HTTPException, Body, Depends, Query, Header
 from fastapi.responses import JSONResponse
 from src.domains.health.schemas import (
     SensorBatch, SensorBatchDB, 
-    PatientDataResponse, PatientAlertsResponse
+    PatientDataResponse, PatientAlertsResponse,
+    PatientHealthSummaryResponse
 )
 from src.domains.health.services import HealthService
 from src.domains.auth.routes import verify_token_jwt
@@ -156,4 +157,50 @@ async def get_patient_alerts(
         raise
     except Exception as e:
         logger.error(f"Error fetching patient alerts: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/patient/{patient_id}/summary", response_model=PatientHealthSummaryResponse)
+async def get_patient_health_summary(
+    patient_id: str,
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database)
+):
+    """
+    Get health summary for a patient (last 24 hours).
+    
+    Includes:
+    - Heart rate (avg, min, max, last reading)
+    - Steps (total)
+    - Sleep (total minutes)
+    - Unavailable metrics (SpO2, Blood Pressure, Temperature)
+    
+    AUTHORIZATION:
+    - If user_id == patient_id: User accessing own summary
+    - Otherwise: Must have active pairing as caregiver
+    """
+    try:
+        service = HealthService(db)
+        
+        # Authorization check
+        has_access = await service.verify_patient_access(
+            requester_id=user_id,
+            patient_id=patient_id
+        )
+        
+        if not has_access:
+            raise HTTPException(
+                status_code=403, 
+                detail="No tienes permiso para ver el resumen de este paciente"
+            )
+        
+        # Fetch summary
+        summary = await service.get_patient_health_summary(patient_id=patient_id)
+        
+        return summary
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching patient summary: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
