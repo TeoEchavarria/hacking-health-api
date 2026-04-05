@@ -48,6 +48,15 @@ class PairingService:
         if not user:
             raise ValueError("User not found")
         
+        # CLEANUP: Delete any existing pending codes for this patient
+        # This prevents accumulation of unused pairing codes
+        cleanup_result = await self.collection.delete_many({
+            "patientId": user_id,
+            "status": "pending"
+        })
+        if cleanup_result.deleted_count > 0:
+            logger.info(f"Cleaned up {cleanup_result.deleted_count} old pending codes for user {user_id}")
+        
         # Generate unique code (retry if collision)
         max_retries = 10
         code = None
