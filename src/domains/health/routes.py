@@ -3,7 +3,8 @@ from fastapi.responses import JSONResponse
 from src.domains.health.schemas import (
     SensorBatch, SensorBatchDB, 
     PatientDataResponse, PatientAlertsResponse,
-    PatientHealthSummaryResponse
+    PatientHealthSummaryResponse,
+    HealthMetricsInput, HealthMetricsResponse
 )
 from src.domains.health.services import HealthService
 from src.domains.auth.routes import verify_token_jwt
@@ -203,4 +204,39 @@ async def get_patient_health_summary(
         raise
     except Exception as e:
         logger.error(f"Error fetching patient summary: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/metrics", response_model=HealthMetricsResponse)
+async def upload_health_metrics(
+    metrics: HealthMetricsInput,
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database)
+):
+    """
+    Upload health metrics from watch (via phone app).
+    
+    Called when:
+    - Watch sends data to phone (immediate sync)
+    - Periodic sync every 15 minutes
+    
+    Stores heart rate, steps, and sleep data.
+    """
+    try:
+        # Verify user is uploading their own data
+        if metrics.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo puedes subir tus propios datos de salud"
+            )
+        
+        service = HealthService(db)
+        result = await service.ingest_health_metrics(metrics)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading health metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

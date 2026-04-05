@@ -313,3 +313,113 @@ class HealthService:
                 response["last_sync"] = int(latest_batch["createdAt"].timestamp() * 1000)
         
         return response
+    
+    async def ingest_health_metrics(self, metrics) -> Dict[str, Any]:
+        """
+        Ingest health metrics from watch (via phone).
+        Stores in health_metrics collection.
+        
+        Args:
+            metrics: HealthMetricsInput with steps, sleep, heart_rate data
+            
+        Returns:
+            Dict with success, message, metrics_stored count
+        """
+        metrics_stored = 0
+        now = datetime.now(timezone.utc)
+        
+        # Store steps
+        if metrics.steps is not None:
+            await self.db.health_metrics.update_one(
+                {
+                    "userId": metrics.user_id,
+                    "type": "steps",
+                    "date": metrics.date
+                },
+                {
+                    "$set": {
+                        "value": metrics.steps,
+                        "timestamp": metrics.sync_timestamp,
+                        "updatedAt": now
+                    },
+                    "$setOnInsert": {
+                        "createdAt": now
+                    }
+                },
+                upsert=True
+            )
+            metrics_stored += 1
+            logger.info(f"Stored steps for {metrics.user_id}: {metrics.steps}")
+        
+        # Store sleep
+        if metrics.sleep_minutes is not None:
+            await self.db.health_metrics.update_one(
+                {
+                    "userId": metrics.user_id,
+                    "type": "sleep",
+                    "date": metrics.date
+                },
+                {
+                    "$set": {
+                        "value": metrics.sleep_minutes,
+                        "timestamp": metrics.sync_timestamp,
+                        "updatedAt": now
+                    },
+                    "$setOnInsert": {
+                        "createdAt": now
+                    }
+                },
+                upsert=True
+            )
+            metrics_stored += 1
+            logger.info(f"Stored sleep for {metrics.user_id}: {metrics.sleep_minutes} min")
+        
+        # Store heart rate (latest aggregated values)
+        if metrics.avg_heart_rate is not None:
+            await self.db.health_metrics.update_one(
+                {
+                    "userId": metrics.user_id,
+                    "type": "heart_rate",
+                    "date": metrics.date
+                },
+                {
+                    "$set": {
+                        "average": metrics.avg_heart_rate,
+                        "min": metrics.min_heart_rate,
+                        "max": metrics.max_heart_rate,
+                        "timestamp": metrics.sync_timestamp,
+                        "updatedAt": now
+                    },
+                    "$setOnInsert": {
+                        "createdAt": now
+                    }
+                },
+                upsert=True
+            )
+            metrics_stored += 1
+            logger.info(f"Stored heart_rate for {metrics.user_id}: avg={metrics.avg_heart_rate}")
+        
+        # Store individual HR samples if provided
+        if metrics.heart_rate_samples:
+            hr_docs = [
+                {
+                    "userId": metrics.user_id,
+                    "type": "heart_rate_sample",
+                    "date": metrics.date,
+                    "bpm": sample.bpm,
+                    "timestamp": sample.timestamp,
+                    "accuracy": sample.accuracy,
+                    "createdAt": now
+                }
+                for sample in metrics.heart_rate_samples
+            ]
+            if hr_docs:
+                await self.db.health_metrics.insert_many(hr_docs)
+                metrics_stored += len(hr_docs)
+                logger.info(f"Stored {len(hr_docs)} HR samples for {metrics.user_id}")
+        
+        return {
+            "success": True,
+            "message": "Métricas guardadas correctamente",
+            "metrics_stored": metrics_stored
+        }

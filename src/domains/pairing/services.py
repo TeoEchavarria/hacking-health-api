@@ -156,6 +156,19 @@ class PairingService:
                 "error": "No puedes vincularte contigo mismo"
             }
         
+        # Check for existing active pairing between this patient and caregiver
+        existing_pairing = await self.collection.find_one({
+            "patientId": pairing["patientId"],
+            "caregiverId": caregiver_id,
+            "status": "active"
+        })
+        if existing_pairing:
+            logger.warning(f"Duplicate pairing attempt: caregiver {caregiver_id} already paired with patient {pairing['patientId']}")
+            return {
+                "success": False,
+                "error": "Ya tienes una vinculación activa con esta persona"
+            }
+        
         # Activate pairing
         activated_at = datetime.now(timezone.utc)
         await self.collection.update_one(

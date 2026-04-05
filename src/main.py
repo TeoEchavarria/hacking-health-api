@@ -45,8 +45,30 @@ async def startup_db_client():
         await database.pairings.create_index("patientId")
         await database.pairings.create_index("caregiverId")
         await database.pairings.create_index([("status", 1), ("expiresAt", 1)])
+        # Unique index: only one active pairing per patient+caregiver pair
+        await database.pairings.create_index(
+            [("patientId", 1), ("caregiverId", 1)],
+            unique=True,
+            partialFilterExpression={"status": "active", "caregiverId": {"$ne": None}}
+        )
     except Exception as e:
         logger.warning(f"Could not create indexes for pairings: {e}")
+    
+    # Create indexes for health_metrics collection
+    try:
+        await database.health_metrics.create_index("userId")
+        await database.health_metrics.create_index([("userId", 1), ("type", 1)])
+        await database.health_metrics.create_index([("userId", 1), ("timestamp", -1)])
+        await database.health_metrics.create_index("timestamp")
+    except Exception as e:
+        logger.warning(f"Could not create indexes for health_metrics: {e}")
+    
+    # CLEANUP: Delete all existing pairings to start fresh
+    try:
+        result = await database.pairings.delete_many({})
+        logger.info(f"Cleaned up {result.deleted_count} existing pairings")
+    except Exception as e:
+        logger.warning(f"Could not cleanup pairings: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

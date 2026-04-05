@@ -131,3 +131,34 @@ class PatientHealthSummaryResponse(BaseModel):
     ]
     last_sync: Optional[int] = None  # timestamp ms
     data_available: bool = False
+
+
+# =========================================
+# Health Metrics Input (from Watch via Phone)
+# =========================================
+
+class HeartRateMetricInput(BaseModel):
+    """Single heart rate reading."""
+    bpm: int
+    timestamp: int  # ms
+    accuracy: Optional[str] = None
+
+
+class HealthMetricsInput(BaseModel):
+    """Input for POST /health/metrics - receives watch health data."""
+    user_id: str
+    date: str  # YYYY-MM-DD
+    steps: Optional[int] = None
+    sleep_minutes: Optional[int] = None
+    heart_rate_samples: Optional[List[HeartRateMetricInput]] = None
+    avg_heart_rate: Optional[int] = None
+    min_heart_rate: Optional[int] = None
+    max_heart_rate: Optional[int] = None
+    sync_timestamp: int  # ms
+
+
+class HealthMetricsResponse(BaseModel):
+    """Response for POST /health/metrics"""
+    success: bool
+    message: str
+    metrics_stored: int = 0
