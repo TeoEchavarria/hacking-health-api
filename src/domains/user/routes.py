@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from src.core.database import get_database
-from src.domains.auth.routes import verify_token
+from src.domains.auth.routes import verify_token, verify_token_jwt
 from src.domains.user.schemas import UserResponse, OAuthProviderInfo, FullUserProfileResponse, ConnectionInfo
 from src.domains.pairing.services import PairingService
 from bson.objectid import ObjectId
@@ -67,7 +67,7 @@ async def get_current_user(
 
 @user_router.get("/profile/full", response_model=FullUserProfileResponse)
 async def get_full_user_profile(
-    user_id: str = Depends(verify_token),
+    user_id: str = Depends(verify_token_jwt),
     db=Depends(get_database),
 ):
     """
