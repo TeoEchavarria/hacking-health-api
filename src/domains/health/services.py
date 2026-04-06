@@ -247,25 +247,25 @@ class HealthService:
         }
         
         # Try to get heart rate data from health_metrics collection
-        hr_data = await self.db.health_metrics.find({
+        # Use find_one to get only the most recent heart rate record (more efficient)
+        hr_data = await self.db.health_metrics.find_one({
             "userId": patient_id,
             "type": "heart_rate",
             "timestamp": {"$gte": start_ts}
-        }).sort("timestamp", -1).to_list(length=1000)
+        }, sort=[("timestamp", -1)])
         
-        if hr_data:
-            hr_values = [r.get("value", 0) for r in hr_data if r.get("value")]
-            if hr_values:
-                response["heart_rate"] = {
-                    "available": True,
-                    "average": int(sum(hr_values) / len(hr_values)),
-                    "min": min(hr_values),
-                    "max": max(hr_values),
-                    "last_reading": hr_values[0],
-                    "last_reading_time": hr_data[0].get("timestamp")
-                }
-                response["data_available"] = True
-                response["last_sync"] = hr_data[0].get("timestamp")
+        if hr_data and hr_data.get("average"):
+            # Use pre-aggregated values stored when data was synced from watch
+            response["heart_rate"] = {
+                "available": True,
+                "average": hr_data.get("average"),
+                "min": hr_data.get("min"),
+                "max": hr_data.get("max"),
+                "last_reading": hr_data.get("average"),
+                "last_reading_time": hr_data.get("timestamp")
+            }
+            response["data_available"] = True
+            response["last_sync"] = hr_data.get("timestamp")
         
         # Try to get steps data
         steps_data = await self.db.health_metrics.find_one({
