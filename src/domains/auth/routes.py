@@ -199,29 +199,38 @@ async def verify_token(
         return test_user_id
     
     if not authorization:
-        raise HTTPException(status_code=400, detail='no token provided')
+        logger.warning("[AUTH] No authorization header provided")
+        raise HTTPException(status_code=401, detail='no token provided')
     
     try:
         token = authorization.split(' ')[1]
     except IndexError:
-        raise HTTPException(status_code=400, detail='invalid authorization header format')
+        logger.warning(f"[AUTH] Invalid authorization header format: {authorization[:50]}...")
+        raise HTTPException(status_code=401, detail='invalid authorization header format')
     
     # First try JWT verification
     try:
         payload = verify_access_token(token)
-        return payload["sub"]
-    except (TokenExpiredError, TokenInvalidError):
-        pass  # Fall through to legacy verification
+        user_id = payload["sub"]
+        logger.info(f"[AUTH] JWT verified successfully for user: {user_id}")
+        return user_id
+    except TokenExpiredError:
+        logger.warning(f"[AUTH] JWT token expired, trying legacy fallback")
+    except TokenInvalidError as e:
+        logger.warning(f"[AUTH] JWT invalid ({e}), trying legacy fallback")
     
     # Fall back to legacy opaque token lookup
     user = await db.users.find_one({'token': token})
     
     if not user:
-        raise HTTPException(status_code=403, detail='invalid token')
+        logger.warning(f"[AUTH] Legacy token lookup failed - no user found with token")
+        raise HTTPException(status_code=401, detail='invalid or expired token')
     
     if 'expiry' in user and datetime.datetime.now() > user['expiry']:
-        raise HTTPException(status_code=403, detail='token expired. Use /login to reauthenticate.')
+        logger.warning(f"[AUTH] Legacy token expired for user {user['_id']}")
+        raise HTTPException(status_code=401, detail='token expired. Use /login to reauthenticate.')
     
+    logger.info(f"[AUTH] Legacy token verified for user: {user['_id']}")
     return str(user['_id'])
 
 

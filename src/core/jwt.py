@@ -20,8 +20,8 @@ ISSUER = "hacking-health-api"
 AUDIENCE = "hacking-health-app"
 
 # Token lifetimes
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 10080  # 7 days
+REFRESH_TOKEN_EXPIRE_DAYS = 30  # 30 days
 
 
 class TokenError(Exception):
