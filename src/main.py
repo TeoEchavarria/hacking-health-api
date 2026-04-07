@@ -63,12 +63,8 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for health_metrics: {e}")
     
-    # CLEANUP: Delete all existing pairings to start fresh
-    try:
-        result = await database.pairings.delete_many({})
-        logger.info(f"Cleaned up {result.deleted_count} existing pairings")
-    except Exception as e:
-        logger.warning(f"Could not cleanup pairings: {e}")
+    # NOTE: Pairing cleanup code removed - was deleting active connections on every deployment
+    # If you need to clean up test data, do it manually via MongoDB console
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
