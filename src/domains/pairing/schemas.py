@@ -71,3 +71,10 @@ class PairingStatusResponse(BaseModel):
     class Config:
         populate_by_name = True
         allow_population_by_field_name = True
+
+
+class RevokePairingResponse(BaseModel):
+    """Response after revoking a pairing."""
+    success: bool
+    message: Optional[str] = None
+    error: Optional[str] = None

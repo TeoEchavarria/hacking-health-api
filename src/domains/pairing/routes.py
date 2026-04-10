@@ -7,7 +7,8 @@ from src.domains.pairing.schemas import (
     CreatePairingCodeResponse,
     ValidatePairingCodeRequest,
     ValidatePairingCodeResponse,
-    PairingStatusResponse
+    PairingStatusResponse,
+    RevokePairingResponse
 )
 from src.domains.pairing.services import PairingService
 from src.domains.auth.routes import verify_token_jwt
@@ -257,4 +258,54 @@ async def list_user_pairings(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al listar vinculaciones"
+        )
+
+
+@router.post(
+    "/{pairingId}/revoke",
+    response_model=RevokePairingResponse,
+    summary="Revoke a pairing",
+    description="Revoke an active pairing. User must be patient or caregiver in the pairing."
+)
+async def revoke_pairing(
+    pairingId: str,
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database)
+):
+    """
+    Revoke an active family pairing.
+    
+    Either the patient or caregiver can revoke the pairing.
+    The pairing is marked as "revoked" (not deleted) for audit trail.
+    
+    **Authentication Required:** Bearer token in Authorization header
+    
+    **Path Parameters:**
+    - pairingId: ID of the pairing to revoke
+    
+    **Returns:**
+    - success: Whether revocation succeeded
+    - message: Success message (if success)
+    - error: Error message (if not success)
+    """
+    try:
+        service = PairingService(db)
+        result = await service.revoke_pairing(pairingId, user_id)
+        
+        if result["success"]:
+            logger.info(f"User {user_id} revoked pairing {pairingId}")
+        else:
+            logger.warning(f"Failed to revoke pairing {pairingId}: {result.get('error')}")
+        
+        return RevokePairingResponse(
+            success=result["success"],
+            message=result.get("message"),
+            error=result.get("error")
+        )
+    
+    except Exception as e:
+        logger.error(f"Error revoking pairing: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al revocar vinculación"
         )

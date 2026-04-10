@@ -284,8 +284,83 @@ class PairingService:
         })
         pairings = await cursor.to_list(length=100)
         
-        # Convert ObjectId to string
+        # Convert ObjectId to string and datetime to timestamps
         for pairing in pairings:
             pairing["_id"] = str(pairing["_id"])
+            # Convert datetime fields to milliseconds timestamps (Long)
+            if "createdAt" in pairing and pairing["createdAt"]:
+                pairing["createdAt"] = int(pairing["createdAt"].timestamp() * 1000)
+            if "activatedAt" in pairing and pairing["activatedAt"]:
+                pairing["activatedAt"] = int(pairing["activatedAt"].timestamp() * 1000)
+            if "expiresAt" in pairing and pairing["expiresAt"]:
+                pairing["expiresAt"] = int(pairing["expiresAt"].timestamp() * 1000)
         
         return pairings
+    
+    async def revoke_pairing(
+        self,
+        pairing_id: str,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Revoke an active pairing.
+        
+        The user must be either the patient or caregiver in the pairing.
+        Sets status to "revoked" instead of deleting for audit trail.
+        
+        Args:
+            pairing_id: ID of the pairing to revoke
+            user_id: ID of the user requesting revocation
+            
+        Returns:
+            Dict with success status
+        """
+        try:
+            pairing = await self.collection.find_one({"_id": ObjectId(pairing_id)})
+        except Exception:
+            logger.error(f"Invalid pairing_id format: {pairing_id}")
+            return {
+                "success": False,
+                "error": "ID de vinculación inválido"
+            }
+        
+        if not pairing:
+            return {
+                "success": False,
+                "error": "Vinculación no encontrada"
+            }
+        
+        # Verify user has permission to revoke
+        if pairing.get("patientId") != user_id and pairing.get("caregiverId") != user_id:
+            logger.warning(f"User {user_id} attempted to revoke pairing {pairing_id} without permission")
+            return {
+                "success": False,
+                "error": "No tienes permiso para revocar esta vinculación"
+            }
+        
+        # Check if already revoked
+        if pairing.get("status") == "revoked":
+            return {
+                "success": True,
+                "message": "La vinculación ya estaba revocada"
+            }
+        
+        # Revoke the pairing
+        revoked_at = datetime.now(timezone.utc)
+        await self.collection.update_one(
+            {"_id": ObjectId(pairing_id)},
+            {
+                "$set": {
+                    "status": "revoked",
+                    "revokedAt": revoked_at,
+                    "revokedBy": user_id
+                }
+            }
+        )
+        
+        logger.info(f"Pairing {pairing_id} revoked by user {user_id}")
+        
+        return {
+            "success": True,
+            "message": "Vinculación revocada correctamente"
+        }
