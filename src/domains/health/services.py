@@ -423,3 +423,192 @@ class HealthService:
             "message": "Métricas guardadas correctamente",
             "metrics_stored": metrics_stored
         }
+    
+    # =========================================
+    # Sync Request Methods (On-Demand Sync)
+    # =========================================
+    
+    async def create_sync_request(
+        self,
+        patient_id: str,
+        requested_by: str,
+        priority: str = "normal"
+    ) -> Dict[str, Any]:
+        """
+        Create a sync request for a patient.
+        Called by caregiver to request immediate sync.
+        
+        Args:
+            patient_id: ID of the patient to sync
+            requested_by: ID of the caregiver requesting sync
+            priority: Request priority (normal|urgent)
+            
+        Returns:
+            Dict with request_id, patient_id, requested_by, status, created_at
+        """
+        now = datetime.now(timezone.utc)
+        request_doc = {
+            "patient_id": patient_id,
+            "requested_by": requested_by,
+            "priority": priority,
+            "status": "pending",
+            "created_at": now,
+            "completed_at": None
+        }
+        
+        result = await self.db.sync_requests.insert_one(request_doc)
+        
+        logger.info(
+            f"Sync request created: {result.inserted_id} "
+            f"for patient {patient_id} by {requested_by}"
+        )
+        
+        return {
+            "request_id": str(result.inserted_id),
+            "patient_id": patient_id,
+            "requested_by": requested_by,
+            "status": "pending",
+            "created_at": int(now.timestamp() * 1000)
+        }
+    
+    async def get_pending_sync_request(
+        self,
+        patient_id: str
+    ) -> Dict[str, Any]:
+        """
+        Get the oldest pending sync request for a patient.
+        Called by patient's device to check if sync is needed.
+        
+        Args:
+            patient_id: ID of the patient
+            
+        Returns:
+            Dict with has_pending, request_id, requested_by, priority, created_at
+        """
+        # Find oldest pending request
+        request = await self.db.sync_requests.find_one(
+            {
+                "patient_id": patient_id,
+                "status": "pending"
+            },
+            sort=[("created_at", 1)]  # FIFO - oldest first
+        )
+        
+        if not request:
+            return {"has_pending": False}
+        
+        return {
+            "has_pending": True,
+            "request_id": str(request["_id"]),
+            "requested_by": request.get("requested_by"),
+            "priority": request.get("priority", "normal"),
+            "created_at": int(request["created_at"].timestamp() * 1000)
+        }
+    
+    async def complete_sync_request(
+        self,
+        request_id: str,
+        metrics_synced: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Mark a sync request as complete.
+        Called by patient's device after syncing.
+        
+        Args:
+            request_id: ID of the sync request
+            metrics_synced: Number of metrics synced
+            
+        Returns:
+            Dict with success, message
+        """
+        now = datetime.now(timezone.utc)
+        
+        result = await self.db.sync_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {
+                "$set": {
+                    "status": "completed",
+                    "completed_at": now,
+                    "metrics_synced": metrics_synced
+                }
+            }
+        )
+        
+        if result.modified_count == 0:
+            return {
+                "success": False,
+                "message": "Solicitud de sync no encontrada"
+            }
+        
+        logger.info(f"Sync request {request_id} completed with {metrics_synced} metrics")
+        
+        return {
+            "success": True,
+            "message": "Sincronización completada"
+        }
+    
+    # =========================================
+    # Heart Rate History Methods
+    # =========================================
+    
+    async def get_patient_heart_rate_history(
+        self,
+        patient_id: str,
+        days: int = 7
+    ) -> Dict[str, Any]:
+        """
+        Get heart rate history for a patient.
+        
+        Args:
+            patient_id: ID of the patient
+            days: Number of days of history to retrieve
+            
+        Returns:
+            Dict with patient_id, patient_name, days_requested, data_points, count
+        """
+        from datetime import timedelta
+        
+        # Get patient name
+        user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
+        patient_name = user.get("name", "Usuario") if user else "Usuario"
+        
+        # Calculate date range
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=days - 1)
+        
+        # Query heart rate records for each day
+        data_points = []
+        
+        for i in range(days):
+            date = start_date + timedelta(days=i)
+            date_str = date.isoformat()
+            
+            # Get aggregated heart rate for this date
+            hr_record = await self.db.health_metrics.find_one({
+                "userId": patient_id,
+                "type": "heart_rate",
+                "date": date_str
+            })
+            
+            # Count samples for this date
+            sample_count = await self.db.health_metrics.count_documents({
+                "userId": patient_id,
+                "type": "heart_rate_sample",
+                "date": date_str
+            })
+            
+            data_points.append({
+                "date": date_str,
+                "avg_bpm": hr_record.get("average") if hr_record else None,
+                "min_bpm": hr_record.get("min") if hr_record else None,
+                "max_bpm": hr_record.get("max") if hr_record else None,
+                "sample_count": sample_count
+            })
+        
+        return {
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "days_requested": days,
+            "data_points": data_points,
+            "count": len([dp for dp in data_points if dp["avg_bpm"] is not None])
+        }

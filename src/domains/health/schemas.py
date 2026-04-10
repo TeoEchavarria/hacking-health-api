@@ -162,3 +162,64 @@ class HealthMetricsResponse(BaseModel):
     success: bool
     message: str
     metrics_stored: int = 0
+
+
+# =========================================
+# Sync Request Models (On-Demand Sync)
+# =========================================
+
+class SyncRequestCreate(BaseModel):
+    """Input for creating a sync request."""
+    priority: str = "normal"  # normal|urgent
+
+
+class SyncRequestResponse(BaseModel):
+    """Response for sync request creation."""
+    request_id: str
+    patient_id: str
+    requested_by: str
+    status: str
+    created_at: int  # timestamp ms
+
+
+class PendingSyncResponse(BaseModel):
+    """Response for checking pending sync requests."""
+    has_pending: bool
+    request_id: Optional[str] = None
+    requested_by: Optional[str] = None
+    priority: Optional[str] = None
+    created_at: Optional[int] = None
+
+
+class SyncCompleteInput(BaseModel):
+    """Input for marking a sync as complete."""
+    request_id: str
+    metrics_synced: int = 0
+
+
+class SyncCompleteResponse(BaseModel):
+    """Response for sync completion."""
+    success: bool
+    message: str
+
+
+# =========================================
+# Heart Rate History Models
+# =========================================
+
+class HeartRateHistoryDataPoint(BaseModel):
+    """Single data point for heart rate history."""
+    date: str  # YYYY-MM-DD
+    avg_bpm: Optional[int] = None
+    min_bpm: Optional[int] = None
+    max_bpm: Optional[int] = None
+    sample_count: int = 0
+
+
+class HeartRateHistoryResponse(BaseModel):
+    """Response for GET /health/patient/{patient_id}/heart-rate-history"""
+    patient_id: str
+    patient_name: Optional[str] = None
+    days_requested: int
+    data_points: List[HeartRateHistoryDataPoint]
+    count: int
