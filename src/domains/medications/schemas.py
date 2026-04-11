@@ -29,6 +29,14 @@ class MedicationCreate(BaseModel):
         populate_by_name = True
 
 
+class MedicationCreateForPatient(MedicationCreate):
+    """
+    Request para que un cuidador cree un medicamento para su paciente.
+    Igual que MedicationCreate pero requiere patient_id en la ruta.
+    """
+    pass
+
+
 class MedicationUpdate(BaseModel):
     """Request para actualizar un medicamento"""
     name: Optional[str] = Field(None, min_length=1)
