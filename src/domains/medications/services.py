@@ -11,6 +11,8 @@ from src._config.logger import get_logger
 
 logger = get_logger(__name__)
 
+PAIRINGS_COLLECTION = "pairings"
+
 
 class MedicationService:
     """Servicio para gestión de medicamentos"""
@@ -19,6 +21,48 @@ class MedicationService:
         self.db = db
         self.medications = db.medications
         self.medication_takes = db.medication_takes
+    
+    async def verify_patient_access(
+        self,
+        db,
+        requester_id: str,
+        patient_id: str
+    ) -> bool:
+        """
+        Verifica si el solicitante tiene acceso a los datos del paciente.
+        
+        Acceso permitido si:
+        1. requester_id == patient_id (accede a sus propios datos)
+        2. requester es un cuidador activo de este paciente
+        """
+        # Caso 1: Usuario accediendo a sus propios datos
+        if requester_id == patient_id:
+            return True
+        
+        # Caso 2: Verificar si es un cuidador activo
+        pairing = await db[PAIRINGS_COLLECTION].find_one({
+            "caregiverId": requester_id,
+            "patientId": patient_id,
+            "status": "active"
+        })
+        
+        if pairing:
+            logger.debug(
+                f"Caregiver {requester_id} has active pairing with patient {patient_id}"
+            )
+            return True
+        
+        logger.warning(
+            f"Access denied: User {requester_id} attempted to access "
+            f"medications of patient {patient_id} without valid pairing"
+        )
+        return False
+    
+    async def get_medication_raw(self, medication_id: str) -> Optional[dict]:
+        """
+        Obtiene el documento raw de un medicamento (para verificaciones internas).
+        """
+        return await self.medications.find_one({"_id": medication_id})
     
     async def create_medication(
         self,
