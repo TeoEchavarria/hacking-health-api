@@ -13,6 +13,7 @@ from src.domains.sense.routes import router as sense_router
 from src.domains.pairing.routes import router as pairing_router
 from src.domains.openwearables.routes import router as openwearables_router
 from src.domains.medications.routes import router as medications_router
+from src.domains.notifications.routes import router as notifications_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -82,6 +83,24 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for medication_takes: {e}")
     
+    # Create indexes for notifications collection
+    try:
+        await database.notifications.create_index("userId")
+        await database.notifications.create_index([("userId", 1), ("type", 1)])
+        await database.notifications.create_index([("userId", 1), ("isRead", 1)])
+        await database.notifications.create_index([("userId", 1), ("timestamp", -1)])
+        await database.notifications.create_index("timestamp")
+    except Exception as e:
+        logger.warning(f"Could not create indexes for notifications: {e}")
+    
+    # Create indexes for health_tips collection
+    try:
+        await database.health_tips.create_index("userId")
+        await database.health_tips.create_index([("userId", 1), ("category", 1)])
+        await database.health_tips.create_index([("userId", 1), ("isActive", 1)])
+    except Exception as e:
+        logger.warning(f"Could not create indexes for health_tips: {e}")
+    
     # NOTE: Pairing cleanup code removed - was deleting active connections on every deployment
     # If you need to clean up test data, do it manually via MongoDB console
 
@@ -116,6 +135,7 @@ app.include_router(sense_router)
 app.include_router(pairing_router)
 app.include_router(openwearables_router)
 app.include_router(medications_router)
+app.include_router(notifications_router)
 
 @app.get("/")
 async def root():
