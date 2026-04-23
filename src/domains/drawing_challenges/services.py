@@ -4,9 +4,11 @@ Provides access to Google's Quick Draw dataset for random drawing challenges.
 """
 import random
 import io
+import os
 from typing import Tuple
 from quickdraw import QuickDrawData
 from src._config.logger import get_logger
+from src._config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -22,8 +24,11 @@ class QuickDrawService:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._qd = QuickDrawData()
-            logger.info("QuickDrawData initialized successfully")
+            # Ensure cache directory exists
+            cache_dir = settings.QUICKDRAW_CACHE_DIR
+            os.makedirs(cache_dir, exist_ok=True)
+            cls._qd = QuickDrawData(cache_dir=cache_dir)
+            logger.info(f"QuickDrawData initialized with cache at {cache_dir}")
         return cls._instance
     
     @property
