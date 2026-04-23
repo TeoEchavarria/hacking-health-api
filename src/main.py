@@ -14,6 +14,8 @@ from src.domains.pairing.routes import router as pairing_router
 from src.domains.openwearables.routes import router as openwearables_router
 from src.domains.medications.routes import router as medications_router
 from src.domains.notifications.routes import router as notifications_router
+from src.domains.location.routes import router as location_router
+from src.domains.drawing_challenges.routes import router as drawing_challenges_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -101,6 +103,19 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for health_tips: {e}")
     
+    # Create indexes for locations collection
+    try:
+        await database.locations.create_index("userId")
+        await database.locations.create_index([("userId", 1), ("createdAt", -1)])
+        await database.locations.create_index("createdAt")
+        # TTL index: auto-delete locations older than 7 days
+        await database.locations.create_index(
+            "createdAt",
+            expireAfterSeconds=7 * 24 * 60 * 60  # 7 days
+        )
+    except Exception as e:
+        logger.warning(f"Could not create indexes for locations: {e}")
+    
     # NOTE: Pairing cleanup code removed - was deleting active connections on every deployment
     # If you need to clean up test data, do it manually via MongoDB console
 
@@ -136,6 +151,8 @@ app.include_router(pairing_router)
 app.include_router(openwearables_router)
 app.include_router(medications_router)
 app.include_router(notifications_router)
+app.include_router(location_router)
+app.include_router(drawing_challenges_router)
 
 @app.get("/")
 async def root():
