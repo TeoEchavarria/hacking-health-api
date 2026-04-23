@@ -3,15 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.domains.txagent.routes import router as txagent_router
 from src.domains.health.routes import router as health_router
 from src.domains.auth.routes import router as auth_router
-from src.domains.appointments.routes import router as appointments_router
 from src.domains.updates.routes import router as updates_router
-from src.domains.kitchen.routes import router as kitchen_router
 from src.domains.user.routes import user_router, users_router
-from src.domains.interests.routes import router as interests_router
-from src.domains.pilot.routes import router as pilot_router
-from src.domains.sense.routes import router as sense_router
 from src.domains.pairing.routes import router as pairing_router
-from src.domains.openwearables.routes import router as openwearables_router
 from src.domains.medications.routes import router as medications_router
 from src.domains.notifications.routes import router as notifications_router
 from src.domains.location.routes import router as location_router
@@ -33,14 +27,8 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_db_client():
     db.connect()
-    # Create indexes for appointments collection
     database = db.get_db()
     logger = get_logger(__name__)
-    try:
-        await database.appointments.create_index("datetime")
-        await database.appointments.create_index([("datetime", 1), ("status", 1)])
-    except Exception as e:
-        logger.warning(f"Could not create indexes for appointments: {e}")
     
     # Create indexes for pairings collection
     try:
@@ -139,16 +127,10 @@ app.add_middleware(LoggingMiddleware)
 app.include_router(txagent_router)
 app.include_router(health_router)
 app.include_router(auth_router)
-app.include_router(appointments_router)
 app.include_router(updates_router)
-app.include_router(kitchen_router, prefix="/kitchen", tags=["Kitchen"])
 app.include_router(user_router)
 app.include_router(users_router)
-app.include_router(interests_router)
-app.include_router(pilot_router)
-app.include_router(sense_router)
 app.include_router(pairing_router)
-app.include_router(openwearables_router)
 app.include_router(medications_router)
 app.include_router(notifications_router)
 app.include_router(location_router)
