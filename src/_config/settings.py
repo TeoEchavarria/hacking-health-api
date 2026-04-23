@@ -28,9 +28,6 @@ class Settings(BaseSettings):
     OPENWEARABLES_HOST: str = "http://localhost:8000"
     OPENWEARABLES_APP_ID: Optional[str] = None
     OPENWEARABLES_APP_SECRET: Optional[str] = None
-    
-    # Quick Draw
-    QUICKDRAW_CACHE_DIR: str = "/tmp/.quickdrawcache"
 
     class Config:
         env_file = ".env"

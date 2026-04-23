@@ -58,8 +58,6 @@ tqdm==4.67.3
 typing_extensions==4.15.0
 urllib3==1.26.20
 uvicorn==0.24.0
-quickdraw
-Pillow
 uvloop==0.22.1
 watchfiles==1.1.1
 websockets==15.0.1
