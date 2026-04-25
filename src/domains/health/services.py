@@ -3,15 +3,18 @@ Business logic for health domain.
 Handles patient data access authorization and retrieval.
 """
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from src._config.logger import get_logger
+from src.domains.health.adapters import normalize_timestamp, extract_date_from_timestamp, now_iso
+from src.domains.health.classification import classify_blood_pressure, classify_heart_rate
 
 logger = get_logger(__name__)
 
 SENSOR_BATCHES_COLLECTION = "sensor_batches"
 ALERTS_COLLECTION = "alerts"
 PAIRINGS_COLLECTION = "pairings"
+BP_COLLECTION = "blood_pressure_readings"
 
 
 class HealthService:
@@ -217,10 +220,8 @@ class HealthService:
             patient_id: ID of the patient
             
         Returns:
-            Dict with health metrics summary
+            Dict with health metrics summary including blood pressure
         """
-        from datetime import timedelta
-        
         # Get patient name
         user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
         patient_name = user.get("name", "Usuario") if user else "Usuario"
@@ -229,25 +230,21 @@ class HealthService:
         now = datetime.now(timezone.utc)
         twenty_four_hours_ago = now - timedelta(hours=24)
         start_ts = int(twenty_four_hours_ago.timestamp() * 1000)
+        start_iso = twenty_four_hours_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
         
-        # Initialize response
+        # Initialize response with new structure
         response = {
             "patient_id": patient_id,
             "patient_name": patient_name,
             "heart_rate": {"available": False},
+            "blood_pressure": {"available": False, "reading_count": 0},
             "steps": {"available": False},
             "sleep": {"available": False},
-            "unavailable_metrics": [
-                {"name": "SpO2", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"},
-                {"name": "Presión Arterial", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"},
-                {"name": "Temperatura", "reason": "NO DISPONIBLE PARA TU DISPOSITIVO"}
-            ],
             "last_sync": None,
             "data_available": False
         }
         
         # Try to get heart rate data from health_metrics collection
-        # Use find_one to get only the most recent heart rate record (more efficient)
         hr_data = await self.db.health_metrics.find_one({
             "userId": patient_id,
             "type": "heart_rate",
@@ -255,17 +252,64 @@ class HealthService:
         }, sort=[("timestamp", -1)])
         
         if hr_data and hr_data.get("average"):
-            # Use pre-aggregated values stored when data was synced from watch
+            hr_category = classify_heart_rate(hr_data.get("average"))
             response["heart_rate"] = {
                 "available": True,
                 "average": hr_data.get("average"),
                 "min": hr_data.get("min"),
                 "max": hr_data.get("max"),
                 "last_reading": hr_data.get("average"),
-                "last_reading_time": hr_data.get("timestamp")
+                "last_reading_time": normalize_timestamp(hr_data.get("timestamp")),
+                "current_category": hr_category["category"]
             }
             response["data_available"] = True
-            response["last_sync"] = hr_data.get("timestamp")
+            response["last_sync"] = normalize_timestamp(hr_data.get("timestamp"))
+        
+        # Try to get blood pressure data
+        bp_data = await self.db[BP_COLLECTION].find_one({
+            "userId": patient_id,
+            "timestamp": {"$gte": start_iso}
+        }, sort=[("timestamp", -1)])
+        
+        if bp_data:
+            # Count BP readings in last 24 hours
+            bp_count = await self.db[BP_COLLECTION].count_documents({
+                "userId": patient_id,
+                "timestamp": {"$gte": start_iso}
+            })
+            
+            # Get stats from last 24h readings
+            bp_cursor = self.db[BP_COLLECTION].find({
+                "userId": patient_id,
+                "timestamp": {"$gte": start_iso}
+            })
+            bp_readings = await bp_cursor.to_list(length=100)
+            
+            if bp_readings:
+                systolics = [r["systolic"] for r in bp_readings]
+                diastolics = [r["diastolic"] for r in bp_readings]
+                
+                latest = bp_data
+                classification = classify_blood_pressure(latest["systolic"], latest["diastolic"])
+                
+                response["blood_pressure"] = {
+                    "available": True,
+                    "avg_systolic": round(sum(systolics) / len(systolics)),
+                    "avg_diastolic": round(sum(diastolics) / len(diastolics)),
+                    "min_systolic": min(systolics),
+                    "max_systolic": max(systolics),
+                    "last_systolic": latest["systolic"],
+                    "last_diastolic": latest["diastolic"],
+                    "last_pulse": latest.get("pulse"),
+                    "last_reading_time": latest["timestamp"],
+                    "current_stage": classification["stage"],
+                    "reading_count": bp_count
+                }
+                response["data_available"] = True
+                
+                # Update last_sync if BP is more recent
+                if not response["last_sync"] or latest["timestamp"] > response["last_sync"]:
+                    response["last_sync"] = latest["timestamp"]
         
         # Try to get steps data
         steps_data = await self.db.health_metrics.find_one({
@@ -278,11 +322,12 @@ class HealthService:
             response["steps"] = {
                 "available": True,
                 "total": steps_data.get("value", 0),
-                "last_updated": steps_data.get("timestamp")
+                "last_updated": normalize_timestamp(steps_data.get("timestamp"))
             }
             response["data_available"] = True
-            if not response["last_sync"] or steps_data.get("timestamp", 0) > response["last_sync"]:
-                response["last_sync"] = steps_data.get("timestamp")
+            ts_iso = normalize_timestamp(steps_data.get("timestamp"))
+            if not response["last_sync"] or (ts_iso and ts_iso > response["last_sync"]):
+                response["last_sync"] = ts_iso
         
         # Try to get sleep data
         sleep_data = await self.db.health_metrics.find_one({
@@ -296,21 +341,23 @@ class HealthService:
                 "available": True,
                 "total_minutes": sleep_data.get("value", 0),
                 "last_night": sleep_data.get("value", 0),
-                "last_updated": sleep_data.get("timestamp")
+                "last_updated": normalize_timestamp(sleep_data.get("timestamp"))
             }
             response["data_available"] = True
-            if not response["last_sync"] or sleep_data.get("timestamp", 0) > response["last_sync"]:
-                response["last_sync"] = sleep_data.get("timestamp")
+            ts_iso = normalize_timestamp(sleep_data.get("timestamp"))
+            if not response["last_sync"] or (ts_iso and ts_iso > response["last_sync"]):
+                response["last_sync"] = ts_iso
         
         # If no health_metrics data, check if there's any sensor_batches data
-        # to at least know the user has synced something
         if not response["data_available"]:
             latest_batch = await self.db[SENSOR_BATCHES_COLLECTION].find_one(
                 {"userId": patient_id},
                 sort=[("createdAt", -1)]
             )
             if latest_batch:
-                response["last_sync"] = int(latest_batch["createdAt"].timestamp() * 1000)
+                response["last_sync"] = normalize_timestamp(
+                    int(latest_batch["createdAt"].timestamp() * 1000)
+                )
         
         return response
     
@@ -566,8 +613,6 @@ class HealthService:
         Returns:
             Dict with patient_id, patient_name, days_requested, data_points, count
         """
-        from datetime import timedelta
-        
         # Get patient name
         user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
         patient_name = user.get("name", "Usuario") if user else "Usuario"
@@ -611,4 +656,200 @@ class HealthService:
             "days_requested": days,
             "data_points": data_points,
             "count": len([dp for dp in data_points if dp["avg_bpm"] is not None])
+        }
+    
+    # =========================================
+    # Blood Pressure Methods
+    # =========================================
+    
+    async def store_blood_pressure_reading(
+        self,
+        user_id: str,
+        systolic: int,
+        diastolic: int,
+        pulse: Optional[int],
+        timestamp: str,
+        source: Optional[str] = None,
+        crisis_flag: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Store a single blood pressure reading.
+        
+        Args:
+            user_id: User's ID
+            systolic: Systolic BP in mmHg
+            diastolic: Diastolic BP in mmHg
+            pulse: Optional pulse reading in BPM
+            timestamp: ISO 8601 timestamp
+            source: Source of reading (e.g., "omron_ble", "manual")
+            crisis_flag: Whether edge detected a crisis
+            
+        Returns:
+            Dict with the stored reading document
+        """
+        # Classify the reading
+        classification = classify_blood_pressure(systolic, diastolic)
+        
+        # Extract date for aggregation
+        date = extract_date_from_timestamp(timestamp)
+        
+        # Create document
+        now = datetime.now(timezone.utc)
+        doc = {
+            "userId": user_id,
+            "systolic": systolic,
+            "diastolic": diastolic,
+            "pulse": pulse,
+            "timestamp": timestamp,
+            "date": date,
+            "source": source,
+            "stage": classification["stage"],
+            "severity": classification["severity"],
+            "crisis_flag": crisis_flag,
+            "createdAt": now
+        }
+        
+        result = await self.db[BP_COLLECTION].insert_one(doc)
+        doc["_id"] = result.inserted_id
+        
+        logger.info(
+            f"Stored BP reading for {user_id}: {systolic}/{diastolic} "
+            f"({classification['stage']})"
+        )
+        
+        return doc
+    
+    async def store_blood_pressure_batch(
+        self,
+        user_id: str,
+        readings: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Store multiple blood pressure readings.
+        
+        Args:
+            user_id: User's ID
+            readings: List of BP reading dicts with systolic, diastolic, pulse, timestamp, source
+            
+        Returns:
+            Dict with stored_count and list of stored documents
+        """
+        now = datetime.now(timezone.utc)
+        docs = []
+        
+        for reading in readings:
+            classification = classify_blood_pressure(
+                reading["systolic"], reading["diastolic"]
+            )
+            date = extract_date_from_timestamp(reading["timestamp"])
+            
+            docs.append({
+                "userId": user_id,
+                "systolic": reading["systolic"],
+                "diastolic": reading["diastolic"],
+                "pulse": reading.get("pulse"),
+                "timestamp": reading["timestamp"],
+                "date": date,
+                "source": reading.get("source"),
+                "stage": classification["stage"],
+                "severity": classification["severity"],
+                "crisis_flag": False,
+                "createdAt": now
+            })
+        
+        if docs:
+            result = await self.db[BP_COLLECTION].insert_many(docs)
+            for i, doc in enumerate(docs):
+                doc["_id"] = result.inserted_ids[i]
+        
+        logger.info(f"Stored {len(docs)} BP readings for {user_id}")
+        
+        return {
+            "stored_count": len(docs),
+            "documents": docs
+        }
+    
+    async def get_patient_blood_pressure_history(
+        self,
+        patient_id: str,
+        days: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Get blood pressure history for a patient.
+        
+        Args:
+            patient_id: ID of the patient
+            days: Number of days of history to retrieve
+            
+        Returns:
+            Dict with patient_id, patient_name, days_requested, data_points, count
+        """
+        # Get patient name
+        user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
+        patient_name = user.get("name", "Usuario") if user else "Usuario"
+        
+        # Calculate date range
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=days - 1)
+        start_date_str = start_date.isoformat()
+        
+        # Query all BP readings in date range
+        cursor = self.db[BP_COLLECTION].find({
+            "userId": patient_id,
+            "date": {"$gte": start_date_str}
+        })
+        readings = await cursor.to_list(length=10000)
+        
+        # Group by date
+        from collections import defaultdict
+        by_date = defaultdict(list)
+        for r in readings:
+            by_date[r["date"]].append(r)
+        
+        # Build data points
+        data_points = []
+        for i in range(days):
+            date = start_date + timedelta(days=i)
+            date_str = date.isoformat()
+            day_readings = by_date.get(date_str, [])
+            
+            if day_readings:
+                systolics = [r["systolic"] for r in day_readings]
+                diastolics = [r["diastolic"] for r in day_readings]
+                pulses = [r["pulse"] for r in day_readings if r.get("pulse")]
+                stages = [r["stage"] for r in day_readings]
+                
+                # Determine dominant stage (most frequent)
+                from collections import Counter
+                stage_counts = Counter(stages)
+                dominant_stage = stage_counts.most_common(1)[0][0] if stage_counts else None
+                
+                data_points.append({
+                    "date": date_str,
+                    "avg_systolic": round(sum(systolics) / len(systolics)),
+                    "avg_diastolic": round(sum(diastolics) / len(diastolics)),
+                    "min_systolic": min(systolics),
+                    "max_systolic": max(systolics),
+                    "avg_pulse": round(sum(pulses) / len(pulses)) if pulses else None,
+                    "stage": dominant_stage,
+                    "sample_count": len(day_readings)
+                })
+            else:
+                data_points.append({
+                    "date": date_str,
+                    "avg_systolic": None,
+                    "avg_diastolic": None,
+                    "min_systolic": None,
+                    "max_systolic": None,
+                    "avg_pulse": None,
+                    "stage": None,
+                    "sample_count": 0
+                })
+        
+        return {
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "days_requested": days,
+            "data_points": data_points,
+            "count": len([dp for dp in data_points if dp["avg_systolic"] is not None])
         }

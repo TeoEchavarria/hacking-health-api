@@ -104,6 +104,32 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for locations: {e}")
     
+    # Create indexes for blood_pressure_readings collection
+    try:
+        await database.blood_pressure_readings.create_index("userId")
+        await database.blood_pressure_readings.create_index([("userId", 1), ("timestamp", -1)])
+        await database.blood_pressure_readings.create_index([("userId", 1), ("date", 1)])
+        await database.blood_pressure_readings.create_index("timestamp")
+        await database.blood_pressure_readings.create_index([("userId", 1), ("stage", 1)])
+    except Exception as e:
+        logger.warning(f"Could not create indexes for blood_pressure_readings: {e}")
+    
+    # Create indexes for bp_cusum_state collection (CUSUM drift detection state)
+    try:
+        await database.bp_cusum_state.create_index("userId", unique=True)
+    except Exception as e:
+        logger.warning(f"Could not create indexes for bp_cusum_state: {e}")
+    
+    # Create indexes for alerts collection
+    try:
+        await database.alerts.create_index("patient_id")
+        await database.alerts.create_index([("patient_id", 1), ("type", 1)])
+        await database.alerts.create_index([("patient_id", 1), ("status", 1)])
+        await database.alerts.create_index([("patient_id", 1), ("created_at_iso", -1)])
+        await database.alerts.create_index("severity")
+    except Exception as e:
+        logger.warning(f"Could not create indexes for alerts: {e}")
+    
     # NOTE: Pairing cleanup code removed - was deleting active connections on every deployment
     # If you need to clean up test data, do it manually via MongoDB console
 

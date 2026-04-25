@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field, validator
-from typing import List, Optional
-from datetime import datetime
+from pydantic import BaseModel, Field, validator, root_validator
+from typing import List, Optional, Union
+from datetime import datetime, timezone
 
 
 class SensorRecordInput(BaseModel):
@@ -49,6 +49,110 @@ class PatientDataResponse(BaseModel):
 
 
 # =========================================
+# Blood Pressure Input Models
+# =========================================
+
+class BloodPressureReadingInput(BaseModel):
+    """Single BP reading from a home monitor or wearable."""
+    systolic: int  # mmHg
+    diastolic: int  # mmHg
+    pulse: Optional[int] = None  # BPM captured during BP measurement
+    timestamp: str  # ISO 8601: "2025-04-24T10:30:00Z"
+    source: Optional[str] = None  # "omron_ble" | "manual" | "healthkit" | "fhir"
+
+    @validator("systolic")
+    def validate_systolic(cls, v: int) -> int:
+        if not (60 <= v <= 300):
+            raise ValueError("Systolic BP out of physiologically plausible range (60-300 mmHg)")
+        return v
+
+    @validator("diastolic")
+    def validate_diastolic(cls, v: int) -> int:
+        if not (30 <= v <= 200):
+            raise ValueError("Diastolic BP out of physiologically plausible range (30-200 mmHg)")
+        return v
+
+    @root_validator
+    def validate_sbp_greater_than_dbp(cls, values):
+        systolic = values.get("systolic")
+        diastolic = values.get("diastolic")
+        if systolic is not None and diastolic is not None:
+            if diastolic >= systolic:
+                raise ValueError("Diastolic must be less than systolic")
+        return values
+
+    @validator("pulse")
+    def validate_pulse(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (20 <= v <= 300):
+            raise ValueError("Pulse out of physiologically plausible range (20-300 BPM)")
+        return v
+
+    @validator("timestamp")
+    def validate_timestamp_format(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            raise ValueError("Invalid timestamp format (expected ISO 8601)")
+        return v
+
+
+class BloodPressureSubmission(BaseModel):
+    """Input for POST /health/blood-pressure - single reading submission."""
+    user_id: str
+    systolic: int
+    diastolic: int
+    pulse: Optional[int] = None
+    timestamp: str  # ISO 8601
+    source: Optional[str] = None
+    crisis_flag: bool = False  # True if edge detected crisis
+
+    @validator("systolic")
+    def validate_systolic(cls, v: int) -> int:
+        if not (60 <= v <= 300):
+            raise ValueError("Systolic BP out of physiologically plausible range (60-300 mmHg)")
+        return v
+
+    @validator("diastolic")
+    def validate_diastolic(cls, v: int) -> int:
+        if not (30 <= v <= 200):
+            raise ValueError("Diastolic BP out of physiologically plausible range (30-200 mmHg)")
+        return v
+
+    @root_validator
+    def validate_sbp_greater_than_dbp(cls, values):
+        systolic = values.get("systolic")
+        diastolic = values.get("diastolic")
+        if systolic is not None and diastolic is not None:
+            if diastolic >= systolic:
+                raise ValueError("Diastolic must be less than systolic")
+        return values
+
+
+class BloodPressureBatchInput(BaseModel):
+    """Batch of BP readings - used when syncing multiple stored readings."""
+    user_id: str
+    readings: List[BloodPressureReadingInput] = Field(min_length=1)
+    sync_timestamp: str  # ISO 8601 - when the batch was sent
+
+
+class BloodPressureResponse(BaseModel):
+    """Response for POST /health/blood-pressure."""
+    success: bool
+    stage: str  # normal|elevated|hypertension_stage_1|hypertension_stage_2|hypertensive_crisis
+    severity: str  # info|moderate|high|urgent
+    alert_generated: bool = False
+    message: Optional[str] = None
+
+
+class BloodPressureBatchResponse(BaseModel):
+    """Response for POST /health/blood-pressure/batch."""
+    success: bool
+    readings_stored: int
+    alerts_generated: int = 0
+    message: Optional[str] = None
+
+
+# =========================================
 # Patient Alerts Response Models
 # =========================================
 
@@ -87,20 +191,21 @@ class PatientAlertsResponse(BaseModel):
 # =========================================
 
 class HeartRateSummary(BaseModel):
-    """Heart rate statistics."""
+    """Heart rate statistics - mirrors BP summary structure."""
     available: bool = False
     average: Optional[int] = None
     min: Optional[int] = None
     max: Optional[int] = None
     last_reading: Optional[int] = None
-    last_reading_time: Optional[int] = None  # timestamp ms
+    last_reading_time: Optional[str] = None  # ISO 8601
+    current_category: Optional[str] = None  # bradycardia|normal|tachycardia
 
 
 class StepsSummary(BaseModel):
     """Steps statistics."""
     available: bool = False
     total: Optional[int] = None
-    last_updated: Optional[int] = None  # timestamp ms
+    last_updated: Optional[str] = None  # ISO 8601
 
 
 class SleepSummary(BaseModel):
@@ -108,13 +213,22 @@ class SleepSummary(BaseModel):
     available: bool = False
     total_minutes: Optional[int] = None
     last_night: Optional[int] = None  # minutes
-    last_updated: Optional[int] = None  # timestamp ms
+    last_updated: Optional[str] = None  # ISO 8601
 
 
-class UnavailableMetric(BaseModel):
-    """Metric that is not available from device."""
-    name: str
-    reason: str = "NO DISPONIBLE PARA TU DISPOSITIVO"
+class BloodPressureSummary(BaseModel):
+    """Aggregated BP statistics - used in patient health summary."""
+    available: bool = False
+    avg_systolic: Optional[int] = None
+    avg_diastolic: Optional[int] = None
+    min_systolic: Optional[int] = None
+    max_systolic: Optional[int] = None
+    last_systolic: Optional[int] = None
+    last_diastolic: Optional[int] = None
+    last_pulse: Optional[int] = None
+    last_reading_time: Optional[str] = None  # ISO 8601
+    current_stage: Optional[str] = None  # See BP stages
+    reading_count: int = 0
 
 
 class PatientHealthSummaryResponse(BaseModel):
@@ -122,14 +236,10 @@ class PatientHealthSummaryResponse(BaseModel):
     patient_id: str
     patient_name: Optional[str] = None
     heart_rate: HeartRateSummary = HeartRateSummary()
+    blood_pressure: BloodPressureSummary = BloodPressureSummary()
     steps: StepsSummary = StepsSummary()
     sleep: SleepSummary = SleepSummary()
-    unavailable_metrics: List[UnavailableMetric] = [
-        UnavailableMetric(name="SpO2"),
-        UnavailableMetric(name="Presión Arterial"),
-        UnavailableMetric(name="Temperatura")
-    ]
-    last_sync: Optional[int] = None  # timestamp ms
+    last_sync: Optional[str] = None  # ISO 8601
     data_available: bool = False
 
 
@@ -137,24 +247,42 @@ class PatientHealthSummaryResponse(BaseModel):
 # Health Metrics Input (from Watch via Phone)
 # =========================================
 
-class HeartRateMetricInput(BaseModel):
+class HeartRateReadingInput(BaseModel):
     """Single heart rate reading."""
     bpm: int
-    timestamp: int  # ms
-    accuracy: Optional[str] = None
+    timestamp: str  # ISO 8601
+    accuracy: Optional[str] = None  # "high" | "medium" | "low"
+
+    @validator("bpm")
+    def validate_bpm(cls, v: int) -> int:
+        if not (20 <= v <= 300):
+            raise ValueError("BPM out of physiologically plausible range (20-300)")
+        return v
+
+    @validator("timestamp")
+    def validate_timestamp_format(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            raise ValueError("Invalid timestamp format (expected ISO 8601)")
+        return v
+
+
+# Legacy alias for backward compatibility
+HeartRateMetricInput = HeartRateReadingInput
 
 
 class HealthMetricsInput(BaseModel):
-    """Input for POST /health/metrics - receives watch health data."""
+    """Unified health metrics payload - POST /health/metrics."""
     user_id: str
     date: str  # YYYY-MM-DD
     steps: Optional[int] = None
     sleep_minutes: Optional[int] = None
-    heart_rate_samples: Optional[List[HeartRateMetricInput]] = None
+    heart_rate_samples: Optional[List[HeartRateReadingInput]] = None
     avg_heart_rate: Optional[int] = None
     min_heart_rate: Optional[int] = None
     max_heart_rate: Optional[int] = None
-    sync_timestamp: int  # ms
+    sync_timestamp: str  # ISO 8601
 
 
 class HealthMetricsResponse(BaseModel):
@@ -179,7 +307,7 @@ class SyncRequestResponse(BaseModel):
     patient_id: str
     requested_by: str
     status: str
-    created_at: int  # timestamp ms
+    created_at: str  # ISO 8601
 
 
 class PendingSyncResponse(BaseModel):
@@ -188,7 +316,7 @@ class PendingSyncResponse(BaseModel):
     request_id: Optional[str] = None
     requested_by: Optional[str] = None
     priority: Optional[str] = None
-    created_at: Optional[int] = None
+    created_at: Optional[str] = None  # ISO 8601
 
 
 class SyncCompleteInput(BaseModel):
@@ -207,7 +335,7 @@ class SyncCompleteResponse(BaseModel):
 # Heart Rate History Models
 # =========================================
 
-class HeartRateHistoryDataPoint(BaseModel):
+class HeartRateHistoryPoint(BaseModel):
     """Single data point for heart rate history."""
     date: str  # YYYY-MM-DD
     avg_bpm: Optional[int] = None
@@ -216,10 +344,62 @@ class HeartRateHistoryDataPoint(BaseModel):
     sample_count: int = 0
 
 
+# Legacy alias for backward compatibility
+HeartRateHistoryDataPoint = HeartRateHistoryPoint
+
+
 class HeartRateHistoryResponse(BaseModel):
     """Response for GET /health/patient/{patient_id}/heart-rate-history"""
     patient_id: str
     patient_name: Optional[str] = None
     days_requested: int
+    data_points: List[HeartRateHistoryPoint]
+    count: int
+
+
+# =========================================
+# Blood Pressure History Models
+# =========================================
+
+class BloodPressureHistoryPoint(BaseModel):
+    """Single day data point for BP trend chart."""
+    date: str  # YYYY-MM-DD
+    avg_systolic: Optional[int] = None
+    avg_diastolic: Optional[int] = None
+    min_systolic: Optional[int] = None
+    max_systolic: Optional[int] = None
+    avg_pulse: Optional[int] = None
+    stage: Optional[str] = None  # dominant stage for that day
+    sample_count: int = 0
+
+
+class BloodPressureHistoryResponse(BaseModel):
+    """Response for GET /health/patient/{patient_id}/blood-pressure-history"""
+    patient_id: str
+    patient_name: Optional[str] = None
+    days_requested: int
+    data_points: List[BloodPressureHistoryPoint]
+    count: int
+    patient_id: str
+    patient_name: Optional[str] = None
+    days_requested: int
     data_points: List[HeartRateHistoryDataPoint]
     count: int
+
+
+# =========================================
+# Voice BP Parsing Models
+# =========================================
+
+class VoiceParseRequest(BaseModel):
+    """Request for POST /health/parse-bp-voice"""
+    transcription: str = Field(..., min_length=1, max_length=1000)
+
+
+class VoiceParseResult(BaseModel):
+    """Response for POST /health/parse-bp-voice - LLM parsed values from voice."""
+    systolic: Optional[int] = None
+    diastolic: Optional[int] = None
+    pulse: Optional[int] = None
+    device_classification: Optional[str] = None  # "omron", "manual", etc.
+    confidence: str = "low"  # "high" | "low"

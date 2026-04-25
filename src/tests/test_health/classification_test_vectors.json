@@ -1,0 +1,285 @@
+{
+  "description": "Gold Standard test vectors for cardiovascular classification functions. Used to ensure parity between Python (API) and Kotlin (mobile app) implementations.",
+  "version": "1.0.0",
+  "guideline": "AHA/ACC 2025",
+  "blood_pressure_tests": [
+    {
+      "id": "bp_normal_1",
+      "input": {"systolic": 115, "diastolic": 75},
+      "expected": {"stage": "normal", "severity": "info", "label": "Normal Blood Pressure"}
+    },
+    {
+      "id": "bp_normal_low",
+      "input": {"systolic": 90, "diastolic": 60},
+      "expected": {"stage": "normal", "severity": "info", "label": "Normal Blood Pressure"}
+    },
+    {
+      "id": "bp_normal_boundary",
+      "input": {"systolic": 119, "diastolic": 79},
+      "expected": {"stage": "normal", "severity": "info", "label": "Normal Blood Pressure"}
+    },
+    {
+      "id": "bp_elevated_lower",
+      "input": {"systolic": 120, "diastolic": 75},
+      "expected": {"stage": "elevated", "severity": "info", "label": "Elevated Blood Pressure"}
+    },
+    {
+      "id": "bp_elevated_upper",
+      "input": {"systolic": 129, "diastolic": 79},
+      "expected": {"stage": "elevated", "severity": "info", "label": "Elevated Blood Pressure"}
+    },
+    {
+      "id": "bp_elevated_fails_diastolic",
+      "description": "SBP in elevated range but DBP >= 80 makes it Stage 1",
+      "input": {"systolic": 125, "diastolic": 80},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage1_systolic_lower",
+      "input": {"systolic": 130, "diastolic": 75},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage1_systolic_upper",
+      "input": {"systolic": 139, "diastolic": 75},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage1_diastolic_lower",
+      "input": {"systolic": 115, "diastolic": 80},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage1_diastolic_upper",
+      "input": {"systolic": 115, "diastolic": 89},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage1_both",
+      "input": {"systolic": 135, "diastolic": 85},
+      "expected": {"stage": "hypertension_stage_1", "severity": "moderate", "label": "Stage 1 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_systolic_boundary",
+      "input": {"systolic": 140, "diastolic": 75},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_systolic_high",
+      "input": {"systolic": 160, "diastolic": 85},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_diastolic_boundary",
+      "input": {"systolic": 125, "diastolic": 90},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_diastolic_high",
+      "input": {"systolic": 130, "diastolic": 100},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_both",
+      "input": {"systolic": 155, "diastolic": 95},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_stage2_below_crisis",
+      "input": {"systolic": 180, "diastolic": 110},
+      "expected": {"stage": "hypertension_stage_2", "severity": "high", "label": "Stage 2 Hypertension"}
+    },
+    {
+      "id": "bp_crisis_systolic",
+      "input": {"systolic": 181, "diastolic": 100},
+      "expected": {"stage": "hypertensive_crisis", "severity": "urgent", "label": "Hypertensive Crisis"}
+    },
+    {
+      "id": "bp_crisis_diastolic",
+      "input": {"systolic": 160, "diastolic": 121},
+      "expected": {"stage": "hypertensive_crisis", "severity": "urgent", "label": "Hypertensive Crisis"}
+    },
+    {
+      "id": "bp_crisis_both",
+      "input": {"systolic": 200, "diastolic": 130},
+      "expected": {"stage": "hypertensive_crisis", "severity": "urgent", "label": "Hypertensive Crisis"}
+    },
+    {
+      "id": "bp_crisis_extreme",
+      "input": {"systolic": 250, "diastolic": 150},
+      "expected": {"stage": "hypertensive_crisis", "severity": "urgent", "label": "Hypertensive Crisis"}
+    }
+  ],
+  "heart_rate_tests": [
+    {
+      "id": "hr_critical_bradycardia_extreme",
+      "input": {"bpm": 25},
+      "expected": {"category": "critical_bradycardia", "severity": "urgent", "label": "Critical Bradycardia"}
+    },
+    {
+      "id": "hr_critical_bradycardia_boundary",
+      "input": {"bpm": 39},
+      "expected": {"category": "critical_bradycardia", "severity": "urgent", "label": "Critical Bradycardia"}
+    },
+    {
+      "id": "hr_bradycardia_lower",
+      "input": {"bpm": 40},
+      "expected": {"category": "bradycardia", "severity": "moderate", "label": "Bradycardia"}
+    },
+    {
+      "id": "hr_bradycardia_upper",
+      "input": {"bpm": 59},
+      "expected": {"category": "bradycardia", "severity": "moderate", "label": "Bradycardia"}
+    },
+    {
+      "id": "hr_normal_lower",
+      "input": {"bpm": 60},
+      "expected": {"category": "normal", "severity": "info", "label": "Normal Heart Rate"}
+    },
+    {
+      "id": "hr_normal_typical",
+      "input": {"bpm": 72},
+      "expected": {"category": "normal", "severity": "info", "label": "Normal Heart Rate"}
+    },
+    {
+      "id": "hr_normal_upper",
+      "input": {"bpm": 100},
+      "expected": {"category": "normal", "severity": "info", "label": "Normal Heart Rate"}
+    },
+    {
+      "id": "hr_tachycardia_lower",
+      "input": {"bpm": 101},
+      "expected": {"category": "tachycardia", "severity": "moderate", "label": "Tachycardia"}
+    },
+    {
+      "id": "hr_tachycardia_moderate",
+      "input": {"bpm": 120},
+      "expected": {"category": "tachycardia", "severity": "moderate", "label": "Tachycardia"}
+    },
+    {
+      "id": "hr_tachycardia_upper",
+      "input": {"bpm": 150},
+      "expected": {"category": "tachycardia", "severity": "moderate", "label": "Tachycardia"}
+    },
+    {
+      "id": "hr_critical_tachycardia_boundary",
+      "input": {"bpm": 151},
+      "expected": {"category": "critical_tachycardia", "severity": "urgent", "label": "Critical Tachycardia"}
+    },
+    {
+      "id": "hr_critical_tachycardia_high",
+      "input": {"bpm": 180},
+      "expected": {"category": "critical_tachycardia", "severity": "urgent", "label": "Critical Tachycardia"}
+    },
+    {
+      "id": "hr_critical_tachycardia_extreme",
+      "input": {"bpm": 250},
+      "expected": {"category": "critical_tachycardia", "severity": "urgent", "label": "Critical Tachycardia"}
+    }
+  ],
+  "crisis_detection_tests": [
+    {
+      "id": "crisis_none_normal_bp",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 72},
+      "expected": null
+    },
+    {
+      "id": "crisis_none_stage2",
+      "input": {"systolic": 160, "diastolic": 100, "pulse": 80},
+      "expected": null
+    },
+    {
+      "id": "crisis_hypertensive_systolic",
+      "input": {"systolic": 185, "diastolic": 100, "pulse": 80},
+      "expected": {"type": "hypertensive_crisis", "severity": "urgent", "guidance_category": "urgent_help"}
+    },
+    {
+      "id": "crisis_hypertensive_diastolic",
+      "input": {"systolic": 150, "diastolic": 125, "pulse": 80},
+      "expected": {"type": "hypertensive_crisis", "severity": "urgent", "guidance_category": "urgent_help"}
+    },
+    {
+      "id": "crisis_tachycardia",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 160},
+      "expected": {"type": "critical_tachycardia", "severity": "urgent", "guidance_category": "urgent_help"}
+    },
+    {
+      "id": "crisis_bradycardia",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 35},
+      "expected": {"type": "critical_bradycardia", "severity": "urgent", "guidance_category": "urgent_help"}
+    },
+    {
+      "id": "crisis_hypertensive_priority",
+      "description": "Hypertensive crisis takes priority over pulse crisis",
+      "input": {"systolic": 200, "diastolic": 130, "pulse": 160},
+      "expected": {"type": "hypertensive_crisis", "severity": "urgent", "guidance_category": "urgent_help"}
+    },
+    {
+      "id": "crisis_pulse_only",
+      "input": {"systolic": null, "diastolic": null, "pulse": 35},
+      "expected": {"type": "critical_bradycardia", "severity": "urgent", "guidance_category": "urgent_help"}
+    }
+  ],
+  "validation_tests": [
+    {
+      "id": "valid_normal_reading",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 72, "timestamp": "2025-04-24T10:30:00Z"},
+      "expected": {"is_valid": true, "error": null}
+    },
+    {
+      "id": "invalid_systolic_low",
+      "input": {"systolic": 55, "diastolic": 80, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Systolic BP out of physiologically plausible range (60-300 mmHg)"}
+    },
+    {
+      "id": "invalid_systolic_high",
+      "input": {"systolic": 310, "diastolic": 80, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Systolic BP out of physiologically plausible range (60-300 mmHg)"}
+    },
+    {
+      "id": "invalid_diastolic_low",
+      "input": {"systolic": 120, "diastolic": 25, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Diastolic BP out of physiologically plausible range (30-200 mmHg)"}
+    },
+    {
+      "id": "invalid_diastolic_high",
+      "input": {"systolic": 120, "diastolic": 210, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Diastolic BP out of physiologically plausible range (30-200 mmHg)"}
+    },
+    {
+      "id": "invalid_systolic_less_diastolic",
+      "input": {"systolic": 80, "diastolic": 90, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Systolic must be greater than diastolic"}
+    },
+    {
+      "id": "invalid_systolic_equals_diastolic",
+      "input": {"systolic": 100, "diastolic": 100, "pulse": 72, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Systolic must be greater than diastolic"}
+    },
+    {
+      "id": "invalid_pulse_low",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 15, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Pulse out of physiologically plausible range (20-300 BPM)"}
+    },
+    {
+      "id": "invalid_pulse_high",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": 310, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Pulse out of physiologically plausible range (20-300 BPM)"}
+    },
+    {
+      "id": "valid_no_pulse",
+      "input": {"systolic": 120, "diastolic": 80, "pulse": null, "timestamp": null},
+      "expected": {"is_valid": true, "error": null}
+    },
+    {
+      "id": "valid_boundary_systolic_low",
+      "input": {"systolic": 60, "diastolic": 30, "pulse": null, "timestamp": null},
+      "expected": {"is_valid": false, "error": "Systolic must be greater than diastolic"}
+    },
+    {
+      "id": "valid_boundary_systolic_high",
+      "input": {"systolic": 300, "diastolic": 150, "pulse": null, "timestamp": null},
+      "expected": {"is_valid": true, "error": null}
+    }
+  ]
+}
