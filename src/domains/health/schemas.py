@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field, validator, root_validator
-from typing import List, Optional, Union
+from pydantic import BaseModel, Field
+from pydantic import field_validator, model_validator
+from typing import List, Optional, Union, Any
 from datetime import datetime, timezone
 
 
@@ -9,7 +10,8 @@ class SensorRecordInput(BaseModel):
     y: float
     z: float
 
-    @validator("timestamp")
+    @field_validator("timestamp")
+    @classmethod
     def validate_timestamp(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("timestamp must be positive")
@@ -60,34 +62,40 @@ class BloodPressureReadingInput(BaseModel):
     timestamp: str  # ISO 8601: "2025-04-24T10:30:00Z"
     source: Optional[str] = None  # "omron_ble" | "manual" | "healthkit" | "fhir"
 
-    @validator("systolic")
+    @field_validator("systolic")
+    @classmethod
     def validate_systolic(cls, v: int) -> int:
         if not (60 <= v <= 300):
             raise ValueError("Systolic BP out of physiologically plausible range (60-300 mmHg)")
         return v
 
-    @validator("diastolic")
+    @field_validator("diastolic")
+    @classmethod
     def validate_diastolic(cls, v: int) -> int:
         if not (30 <= v <= 200):
             raise ValueError("Diastolic BP out of physiologically plausible range (30-200 mmHg)")
         return v
 
-    @root_validator
-    def validate_sbp_greater_than_dbp(cls, values):
-        systolic = values.get("systolic")
-        diastolic = values.get("diastolic")
-        if systolic is not None and diastolic is not None:
-            if diastolic >= systolic:
-                raise ValueError("Diastolic must be less than systolic")
+    @model_validator(mode='before')
+    @classmethod
+    def validate_sbp_greater_than_dbp(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            systolic = values.get("systolic")
+            diastolic = values.get("diastolic")
+            if systolic is not None and diastolic is not None:
+                if diastolic >= systolic:
+                    raise ValueError("Diastolic must be less than systolic")
         return values
 
-    @validator("pulse")
+    @field_validator("pulse")
+    @classmethod
     def validate_pulse(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and not (20 <= v <= 300):
             raise ValueError("Pulse out of physiologically plausible range (20-300 BPM)")
         return v
 
-    @validator("timestamp")
+    @field_validator("timestamp")
+    @classmethod
     def validate_timestamp_format(cls, v: str) -> str:
         try:
             datetime.fromisoformat(v.replace('Z', '+00:00'))
@@ -106,25 +114,29 @@ class BloodPressureSubmission(BaseModel):
     source: Optional[str] = None
     crisis_flag: bool = False  # True if edge detected crisis
 
-    @validator("systolic")
+    @field_validator("systolic")
+    @classmethod
     def validate_systolic(cls, v: int) -> int:
         if not (60 <= v <= 300):
             raise ValueError("Systolic BP out of physiologically plausible range (60-300 mmHg)")
         return v
 
-    @validator("diastolic")
+    @field_validator("diastolic")
+    @classmethod
     def validate_diastolic(cls, v: int) -> int:
         if not (30 <= v <= 200):
             raise ValueError("Diastolic BP out of physiologically plausible range (30-200 mmHg)")
         return v
 
-    @root_validator
-    def validate_sbp_greater_than_dbp(cls, values):
-        systolic = values.get("systolic")
-        diastolic = values.get("diastolic")
-        if systolic is not None and diastolic is not None:
-            if diastolic >= systolic:
-                raise ValueError("Diastolic must be less than systolic")
+    @model_validator(mode='before')
+    @classmethod
+    def validate_sbp_greater_than_dbp_submission(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            systolic = values.get("systolic")
+            diastolic = values.get("diastolic")
+            if systolic is not None and diastolic is not None:
+                if diastolic >= systolic:
+                    raise ValueError("Diastolic must be less than systolic")
         return values
 
 
@@ -253,13 +265,15 @@ class HeartRateReadingInput(BaseModel):
     timestamp: str  # ISO 8601
     accuracy: Optional[str] = None  # "high" | "medium" | "low"
 
-    @validator("bpm")
+    @field_validator("bpm")
+    @classmethod
     def validate_bpm(cls, v: int) -> int:
         if not (20 <= v <= 300):
             raise ValueError("BPM out of physiologically plausible range (20-300)")
         return v
 
-    @validator("timestamp")
+    @field_validator("timestamp")
+    @classmethod
     def validate_timestamp_format(cls, v: str) -> str:
         try:
             datetime.fromisoformat(v.replace('Z', '+00:00'))
