@@ -2,12 +2,13 @@
 Voice parsing service for blood pressure readings.
 
 Uses OpenAI to extract BP values from natural language transcriptions.
+Supports both text transcriptions and audio files (via Whisper STT).
 """
 import os
 import re
 import json
 from openai import AsyncOpenAI
-from typing import Optional
+from typing import Optional, BinaryIO
 from src._config.logger import get_logger
 
 logger = get_logger(__name__)
@@ -180,6 +181,66 @@ class VoiceParsingService:
             "device_classification": result.get("device_classification"),
             "confidence": result.get("confidence", "low")
         }
+    
+    async def transcribe_audio(self, audio_content: bytes, filename: str) -> str:
+        """
+        Transcribe audio to text using OpenAI Whisper.
+        
+        Args:
+            audio_content: Audio file bytes
+            filename: Original filename (for format detection)
+            
+        Returns:
+            Transcribed text in Spanish
+        """
+        if not self.client:
+            raise ValueError("OpenAI client not configured - cannot transcribe audio")
+        
+        logger.info(f"Transcribing audio file: {filename}, size: {len(audio_content)} bytes")
+        
+        # Whisper API accepts file tuples
+        response = await self.client.audio.transcriptions.create(
+            model="whisper-1",
+            file=(filename, audio_content),
+            language="es",  # Spanish
+            response_format="text"
+        )
+        
+        transcription = response.strip() if isinstance(response, str) else str(response).strip()
+        logger.info(f"Transcription result ({len(transcription)} chars): {transcription[:100]}...")
+        return transcription
+    
+    async def parse_audio(self, audio_content: bytes, filename: str) -> dict:
+        """
+        Transcribe audio and parse BP values in one step.
+        
+        Args:
+            audio_content: Audio file bytes
+            filename: Original filename
+            
+        Returns:
+            dict with: systolic, diastolic, pulse, device_classification, confidence, transcription
+        """
+        # Step 1: Transcribe audio to text
+        transcription = await self.transcribe_audio(audio_content, filename)
+        
+        if not transcription:
+            return {
+                "systolic": None,
+                "diastolic": None,
+                "pulse": None,
+                "device_classification": None,
+                "confidence": "low",
+                "transcription": ""
+            }
+        
+        # Step 2: Parse transcription for BP values
+        result = await self.parse_transcription(transcription)
+        
+        # Include transcription in result for display/verification
+        result["transcription"] = transcription
+        
+        return result
 
 
 # Singleton instance

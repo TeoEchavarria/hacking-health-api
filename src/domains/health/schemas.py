@@ -417,3 +417,13 @@ class VoiceParseResult(BaseModel):
     pulse: Optional[int] = None
     device_classification: Optional[str] = None  # "omron", "manual", etc.
     confidence: str = "low"  # "high" | "low"
+
+
+class AudioParseResult(BaseModel):
+    """Response for POST /health/parse-bp-audio - Parsed values from audio file."""
+    systolic: Optional[int] = None
+    diastolic: Optional[int] = None
+    pulse: Optional[int] = None
+    device_classification: Optional[str] = None
+    confidence: str = "low"  # "high" | "low"
+    transcription: str = ""  # The transcribed text for user verification

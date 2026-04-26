@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Body, Depends, Query, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Body, Depends, Query, Header, BackgroundTasks, File, UploadFile
 from fastapi.responses import JSONResponse
 from src.domains.health.schemas import (
     SensorBatch, SensorBatchDB, 
@@ -11,7 +11,7 @@ from src.domains.health.schemas import (
     BloodPressureSubmission, BloodPressureResponse,
     BloodPressureBatchInput, BloodPressureBatchResponse,
     BloodPressureHistoryResponse,
-    VoiceParseRequest, VoiceParseResult
+    VoiceParseRequest, VoiceParseResult, AudioParseResult
 )
 from src.domains.health.services import HealthService
 from src.domains.health.classification import classify_blood_pressure, detect_crisis
@@ -648,4 +648,66 @@ async def parse_bp_voice(
         
     except Exception as e:
         logger.error(f"Error parsing BP voice: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================
+# Audio BP Parsing Endpoint (Whisper STT)
+# =========================================
+
+@router.post("/parse-bp-audio", response_model=AudioParseResult)
+async def parse_bp_audio(
+    audio: UploadFile = File(...),
+    user_id: str = Depends(verify_token_jwt)
+):
+    """
+    Parse an audio recording to extract blood pressure values.
+    
+    Flow:
+    1. Accepts audio file (3GP, AAC, M4A, MP3, WAV, WEBM)
+    2. Transcribes using OpenAI Whisper (Spanish)
+    3. Extracts BP values using LLM
+    4. Returns values + transcription for confirmation
+    
+    File limits:
+    - Max size: 10MB
+    - Max duration: ~30 seconds recommended
+    """
+    try:
+        logger.info(f"Received audio upload from user {user_id}: {audio.filename}, type: {audio.content_type}")
+        
+        # Read audio content
+        audio_content = await audio.read()
+        
+        # Validate file size
+        if len(audio_content) > 10 * 1024 * 1024:  # 10MB limit
+            raise HTTPException(status_code=413, detail="Audio file too large (max 10MB)")
+        
+        if len(audio_content) < 1000:  # Minimum ~1KB
+            raise HTTPException(status_code=400, detail="Audio file too small or empty")
+        
+        logger.info(f"Audio file size: {len(audio_content)} bytes")
+        
+        # Parse audio (transcribe + extract BP)
+        service = get_voice_parsing_service()
+        result = await service.parse_audio(audio_content, audio.filename or "recording.3gp")
+        
+        logger.info(
+            f"Audio parse result: S={result.get('systolic')} D={result.get('diastolic')} "
+            f"P={result.get('pulse')} conf={result.get('confidence')}"
+        )
+        
+        return AudioParseResult(
+            systolic=result.get("systolic"),
+            diastolic=result.get("diastolic"),
+            pulse=result.get("pulse"),
+            device_classification=result.get("device_classification"),
+            confidence=result.get("confidence", "low"),
+            transcription=result.get("transcription", "")
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error parsing BP audio: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
