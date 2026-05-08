@@ -374,6 +374,7 @@ class HealthService:
         """
         metrics_stored = 0
         now = datetime.now(timezone.utc)
+        source = metrics.source or "unknown"  # Default if not provided
         
         # Store steps
         if metrics.steps is not None:
@@ -387,6 +388,7 @@ class HealthService:
                     "$set": {
                         "value": metrics.steps,
                         "timestamp": metrics.sync_timestamp,
+                        "source": source,
                         "updatedAt": now
                     },
                     "$setOnInsert": {
@@ -396,7 +398,7 @@ class HealthService:
                 upsert=True
             )
             metrics_stored += 1
-            logger.info(f"Stored steps for {metrics.user_id}: {metrics.steps}")
+            logger.info(f"Stored steps for {metrics.user_id}: {metrics.steps} (source: {source})")
         
         # Store sleep
         if metrics.sleep_minutes is not None:
@@ -410,6 +412,7 @@ class HealthService:
                     "$set": {
                         "value": metrics.sleep_minutes,
                         "timestamp": metrics.sync_timestamp,
+                        "source": source,
                         "updatedAt": now
                     },
                     "$setOnInsert": {
@@ -419,7 +422,7 @@ class HealthService:
                 upsert=True
             )
             metrics_stored += 1
-            logger.info(f"Stored sleep for {metrics.user_id}: {metrics.sleep_minutes} min")
+            logger.info(f"Stored sleep for {metrics.user_id}: {metrics.sleep_minutes} min (source: {source})")
         
         # Store heart rate (latest aggregated values)
         if metrics.avg_heart_rate is not None:
@@ -435,6 +438,7 @@ class HealthService:
                         "min": metrics.min_heart_rate,
                         "max": metrics.max_heart_rate,
                         "timestamp": metrics.sync_timestamp,
+                        "source": source,
                         "updatedAt": now
                     },
                     "$setOnInsert": {
@@ -444,7 +448,7 @@ class HealthService:
                 upsert=True
             )
             metrics_stored += 1
-            logger.info(f"Stored heart_rate for {metrics.user_id}: avg={metrics.avg_heart_rate}")
+            logger.info(f"Stored heart_rate for {metrics.user_id}: avg={metrics.avg_heart_rate} (source: {source})")
         
         # Store individual HR samples if provided
         if metrics.heart_rate_samples:
@@ -456,6 +460,7 @@ class HealthService:
                     "bpm": sample.bpm,
                     "timestamp": sample.timestamp,
                     "accuracy": sample.accuracy,
+                    "source": source,
                     "createdAt": now
                 }
                 for sample in metrics.heart_rate_samples
@@ -463,7 +468,7 @@ class HealthService:
             if hr_docs:
                 await self.db.health_metrics.insert_many(hr_docs)
                 metrics_stored += len(hr_docs)
-                logger.info(f"Stored {len(hr_docs)} HR samples for {metrics.user_id}")
+                logger.info(f"Stored {len(hr_docs)} HR samples for {metrics.user_id} (source: {source})")
         
         return {
             "success": True,
@@ -852,4 +857,79 @@ class HealthService:
             "days_requested": days,
             "data_points": data_points,
             "count": len([dp for dp in data_points if dp["avg_systolic"] is not None])
+        }
+
+    # =========================================
+    # Biometrics History (Unified GET)
+    # =========================================
+    
+    async def get_biometrics_history(
+        self,
+        user_id: str,
+        limit: int = 50,
+        days: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Get biometric history for a user.
+        
+        Returns:
+            Dict with isEmpty flag, latest values, and full history.
+            Returns empty list (not 404) for new users.
+        """
+        from src.utils.formatters import format_sleep_duration
+        
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff_iso = cutoff_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        # Fetch all metrics for user within date range
+        cursor = self.db.health_metrics.find({
+            "userId": user_id,
+            "timestamp": {"$gte": cutoff_iso}
+        }).sort("timestamp", -1).limit(limit)
+        
+        records = await cursor.to_list(length=limit)
+        
+        # If no records, user is new or has no data
+        if not records:
+            return {
+                "isEmpty": True,
+                "latest": None,
+                "history": [],
+                "count": 0
+            }
+        
+        # Extract latest of each type
+        latest_hr = next((r for r in records if r.get("type") == "heart_rate"), None)
+        latest_steps = next((r for r in records if r.get("type") == "steps"), None)
+        latest_sleep = next((r for r in records if r.get("type") == "sleep"), None)
+        
+        sleep_minutes = latest_sleep.get("value") if latest_sleep else None
+        
+        latest = {
+            "heartRate": latest_hr.get("average") if latest_hr else None,
+            "heartRateMin": latest_hr.get("min") if latest_hr else None,
+            "heartRateMax": latest_hr.get("max") if latest_hr else None,
+            "steps": latest_steps.get("value") if latest_steps else None,
+            "sleepMinutes": sleep_minutes,
+            "sleepFormatted": format_sleep_duration(sleep_minutes) if sleep_minutes is not None else None,
+        }
+        
+        # Format history for response
+        history = [
+            {
+                "id": str(r.get("_id")),
+                "type": r.get("type"),
+                "value": r.get("value") if r.get("value") is not None else r.get("average"),
+                "date": r.get("date"),
+                "timestamp": r.get("timestamp"),
+                "source": r.get("source", "unknown"),
+            }
+            for r in records
+        ]
+        
+        return {
+            "isEmpty": False,
+            "latest": latest,
+            "history": history,
+            "count": len(history)
         }

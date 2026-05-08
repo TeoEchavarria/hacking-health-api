@@ -297,6 +297,7 @@ class HealthMetricsInput(BaseModel):
     min_heart_rate: Optional[int] = None
     max_heart_rate: Optional[int] = None
     sync_timestamp: str  # ISO 8601
+    source: Optional[str] = None  # "watch" | "voice" | "manual" | any string
 
 
 class HealthMetricsResponse(BaseModel):
@@ -427,3 +428,35 @@ class AudioParseResult(BaseModel):
     device_classification: Optional[str] = None
     confidence: str = "low"  # "high" | "low"
     transcription: str = ""  # The transcribed text for user verification
+
+
+# =========================================
+# Biometrics History Models
+# =========================================
+
+class BiometricsLatest(BaseModel):
+    """Latest biometric values."""
+    heartRate: Optional[int] = None
+    heartRateMin: Optional[int] = None
+    heartRateMax: Optional[int] = None
+    steps: Optional[int] = None
+    sleepMinutes: Optional[int] = None
+    sleepFormatted: Optional[str] = None  # "6 horas 40 minutos"
+
+
+class BiometricsHistoryRecord(BaseModel):
+    """Single biometric record in history."""
+    id: str
+    type: str  # "heart_rate" | "steps" | "sleep"
+    value: Optional[int] = None
+    date: str  # YYYY-MM-DD
+    timestamp: str  # ISO 8601
+    source: str
+
+
+class BiometricsHistoryResponse(BaseModel):
+    """Response for GET /health/biometrics/{user_id}"""
+    isEmpty: bool
+    latest: Optional[BiometricsLatest] = None
+    history: List[BiometricsHistoryRecord]
+    count: int
