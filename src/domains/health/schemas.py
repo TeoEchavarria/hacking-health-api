@@ -262,7 +262,7 @@ class PatientHealthSummaryResponse(BaseModel):
 class HeartRateReadingInput(BaseModel):
     """Single heart rate reading."""
     bpm: int
-    timestamp: str  # ISO 8601
+    timestamp: Union[str, int]  # ISO 8601 string or epoch milliseconds
     accuracy: Optional[str] = None  # "high" | "medium" | "low"
 
     @field_validator("bpm")
@@ -274,11 +274,16 @@ class HeartRateReadingInput(BaseModel):
 
     @field_validator("timestamp")
     @classmethod
-    def validate_timestamp_format(cls, v: str) -> str:
+    def validate_and_convert_timestamp(cls, v: Union[str, int]) -> str:
+        """Convert epoch millis to ISO 8601, or validate existing ISO string."""
+        if isinstance(v, int):
+            # Convert epoch milliseconds to ISO 8601
+            dt = datetime.fromtimestamp(v / 1000, tz=timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             datetime.fromisoformat(v.replace('Z', '+00:00'))
         except (ValueError, AttributeError):
-            raise ValueError("Invalid timestamp format (expected ISO 8601)")
+            raise ValueError("Invalid timestamp format (expected ISO 8601 or epoch millis)")
         return v
 
 
@@ -296,8 +301,22 @@ class HealthMetricsInput(BaseModel):
     avg_heart_rate: Optional[int] = None
     min_heart_rate: Optional[int] = None
     max_heart_rate: Optional[int] = None
-    sync_timestamp: str  # ISO 8601
+    sync_timestamp: Union[str, int]  # ISO 8601 string or epoch milliseconds
     source: Optional[str] = None  # "watch" | "voice" | "manual" | any string
+
+    @field_validator("sync_timestamp")
+    @classmethod
+    def validate_and_convert_sync_timestamp(cls, v: Union[str, int]) -> str:
+        """Convert epoch millis to ISO 8601, or validate existing ISO string."""
+        if isinstance(v, int):
+            # Convert epoch milliseconds to ISO 8601
+            dt = datetime.fromtimestamp(v / 1000, tz=timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            datetime.fromisoformat(v.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            raise ValueError("Invalid timestamp format (expected ISO 8601 or epoch millis)")
+        return v
 
 
 class HealthMetricsResponse(BaseModel):
