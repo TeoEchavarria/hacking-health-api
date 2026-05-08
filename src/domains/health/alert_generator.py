@@ -5,6 +5,7 @@ This module handles alert creation with:
 - Message template rendering
 - 24-hour deduplication (except for hypertensive crisis)
 - Proper guidance generation
+- Push notifications to patient and caregivers
 
 Alerts are stored in the existing 'alerts' collection.
 """
@@ -15,6 +16,7 @@ import uuid
 
 from src._config.logger import get_logger
 from src.domains.health.adapters import now_iso
+from src.utils.fcm_client import send_health_alert_push, is_fcm_available
 
 logger = get_logger(__name__)
 
@@ -235,10 +237,101 @@ class AlertGenerator:
             logger.info(
                 f"Generated {alert_type} alert for user {user_id}: {alert_doc['alert_id']}"
             )
+            
+            # Send push notifications to patient and caregivers
+            await self._send_alert_push_notifications(
+                user_id=user_id,
+                alert_type=alert_type,
+                title=title,
+                body=body,
+                severity=alert_doc["severity"]
+            )
+            
             return alert_doc
         except Exception as e:
             logger.error(f"Failed to store alert: {e}")
             return None
+    
+    async def _send_alert_push_notifications(
+        self,
+        user_id: str,
+        alert_type: str,
+        title: str,
+        body: str,
+        severity: str
+    ):
+        """
+        Send push notifications for an alert to patient and their caregivers.
+        
+        This is called after successfully storing an alert.
+        """
+        if not is_fcm_available():
+            logger.debug("FCM not available, skipping push notifications")
+            return
+        
+        try:
+            # Import here to avoid circular imports
+            from src.domains.pairing.services import PairingService
+            
+            # Get patient info
+            patient = await self.db.users.find_one({"_id": ObjectId(user_id)})
+            if not patient:
+                logger.warning(f"Patient {user_id} not found for push notification")
+                return
+            
+            patient_name = patient.get("name", "Paciente")
+            patient_fcm_token = patient.get("fcmToken")
+            
+            # Send to patient
+            if patient_fcm_token:
+                await send_health_alert_push(
+                    fcm_tokens=[patient_fcm_token],
+                    alert_type=alert_type,
+                    title=title,
+                    body=body,
+                    severity=severity,
+                    is_caregiver_notification=False
+                )
+                logger.debug(f"Sent push notification to patient {user_id}")
+            
+            # Get caregivers for this patient
+            pairing_service = PairingService(self.db)
+            caregiver_ids = await pairing_service.get_patient_caregivers(user_id)
+            
+            if not caregiver_ids:
+                logger.debug(f"No caregivers found for patient {user_id}")
+                return
+            
+            # Get FCM tokens for all caregivers
+            caregiver_tokens = []
+            for caregiver_id in caregiver_ids:
+                try:
+                    caregiver = await self.db.users.find_one({"_id": ObjectId(caregiver_id)})
+                    if caregiver and caregiver.get("fcmToken"):
+                        caregiver_tokens.append(caregiver["fcmToken"])
+                except Exception as e:
+                    logger.error(f"Error getting caregiver {caregiver_id}: {e}")
+            
+            # Send to all caregivers
+            if caregiver_tokens:
+                # Modify title/body for caregiver context
+                caregiver_title = f"⚠️ {patient_name}: {title}"
+                caregiver_body = f"Tu paciente {patient_name} tiene una alerta: {body}"
+                
+                await send_health_alert_push(
+                    fcm_tokens=caregiver_tokens,
+                    alert_type=alert_type,
+                    title=caregiver_title,
+                    body=caregiver_body,
+                    patient_id=user_id,
+                    patient_name=patient_name,
+                    severity=severity,
+                    is_caregiver_notification=True
+                )
+                logger.info(f"Sent push notifications to {len(caregiver_tokens)} caregivers for patient {user_id}")
+                
+        except Exception as e:
+            logger.error(f"Error sending alert push notifications: {e}")
     
     async def generate_bp_crisis_alert(
         self,

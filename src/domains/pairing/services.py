@@ -364,3 +364,55 @@ class PairingService:
             "success": True,
             "message": "Vinculación revocada correctamente"
         }
+    
+    async def get_patient_caregivers(self, patient_id: str) -> list:
+        """
+        Get all active caregivers for a patient.
+        
+        Used for sending notifications to caregivers when a patient has a health event.
+        
+        Args:
+            patient_id: ID of the patient
+            
+        Returns:
+            List of caregiver user IDs
+        """
+        cursor = self.collection.find({
+            "patientId": patient_id,
+            "status": "active"
+        })
+        pairings = await cursor.to_list(length=100)
+        
+        caregiver_ids = [
+            p.get("caregiverId") 
+            for p in pairings 
+            if p.get("caregiverId")
+        ]
+        
+        logger.debug(f"Found {len(caregiver_ids)} caregivers for patient {patient_id}")
+        return caregiver_ids
+    
+    async def get_caregiver_patients(self, caregiver_id: str) -> list:
+        """
+        Get all active patients for a caregiver.
+        
+        Args:
+            caregiver_id: ID of the caregiver
+            
+        Returns:
+            List of patient user IDs
+        """
+        cursor = self.collection.find({
+            "caregiverId": caregiver_id,
+            "status": "active"
+        })
+        pairings = await cursor.to_list(length=100)
+        
+        patient_ids = [
+            p.get("patientId") 
+            for p in pairings 
+            if p.get("patientId")
+        ]
+        
+        logger.debug(f"Found {len(patient_ids)} patients for caregiver {caregiver_id}")
+        return patient_ids

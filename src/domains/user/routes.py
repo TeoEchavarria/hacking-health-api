@@ -148,6 +148,35 @@ async def get_full_user_profile(
     )
 
 
+class FcmTokenUpdate(BaseModel):
+    fcm_token: str
+
+
+@user_router.patch("/fcm-token")
+async def update_fcm_token(
+    body: FcmTokenUpdate,
+    user_id: str = Depends(verify_token),
+    db=Depends(get_database),
+):
+    """
+    Update user's FCM token for push notifications.
+    
+    Called by the mobile app when:
+    - App is installed for the first time
+    - FCM token is rotated/refreshed
+    """
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {
+            "$set": {
+                "fcmToken": body.fcm_token,
+                "fcmTokenUpdatedAt": datetime.now(timezone.utc)
+            }
+        }
+    )
+    return {"success": True}
+
+
 @user_router.get("/{user_id}", response_model=UserResponse)
 async def get_user_by_id(
     user_id: str,
