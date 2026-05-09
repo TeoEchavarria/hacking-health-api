@@ -55,7 +55,21 @@ def build_event_message(event_type: str, payload: Dict[str, Any]) -> str:
     elif event_type == BiometricEventType.WATCH_MEASUREMENT.value:
         systolic = payload.get("systolic")
         diastolic = payload.get("diastolic")
+        stage = payload.get("stage", "")
+        
+        # Map stage to descriptive status
+        status_map = {
+            "normal": "Normal ✓",
+            "elevated": "Elevada ⚠️",
+            "stage_1": "Hipertensión Etapa 1 ⚠️",
+            "stage_2": "Hipertensión Etapa 2 🔴",
+            "hypertensive_crisis": "¡Crisis Hipertensiva! 🚨"
+        }
+        status = status_map.get(stage, "")
+        
         if systolic and diastolic:
+            if status:
+                return f"Presión arterial: {systolic}/{diastolic} mmHg - {status}"
             return f"Presión arterial: {systolic}/{diastolic} mmHg"
         return "Medición del reloj sincronizada"
     
@@ -204,10 +218,18 @@ class BiometricEventService:
         # 5. Send push notification to caregiver (fire-and-forget)
         if caregiver_id and caregiver_fcm_token:
             try:
+                # Título según severidad
+                title_map = {
+                    "critical": "🚨 ALERTA CRÍTICA",
+                    "warning": "⚠️ Advertencia de salud",
+                    "info": "📊 Nueva medición registrada"
+                }
+                push_title = title_map.get(severity, "Nueva alerta de tu persona cuidada")
+                
                 await send_health_alert_push(
                     fcm_tokens=[caregiver_fcm_token],
                     alert_type=event_type,
-                    title="Nueva alerta de tu persona cuidada",
+                    title=push_title,
                     body=f"{patient_name}: {message}" if patient_name else message,
                     patient_id=patient_id,
                     patient_name=patient_name,
