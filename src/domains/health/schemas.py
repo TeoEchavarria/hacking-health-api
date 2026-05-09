@@ -209,7 +209,7 @@ class HeartRateSummary(BaseModel):
     min: Optional[int] = None
     max: Optional[int] = None
     last_reading: Optional[int] = None
-    last_reading_time: Optional[str] = None  # ISO 8601
+    last_reading_time: Optional[int] = None  # Epoch milliseconds
     current_category: Optional[str] = None  # bradycardia|normal|tachycardia
 
 
@@ -217,7 +217,7 @@ class StepsSummary(BaseModel):
     """Steps statistics."""
     available: bool = False
     total: Optional[int] = None
-    last_updated: Optional[str] = None  # ISO 8601
+    last_updated: Optional[int] = None  # Epoch milliseconds
 
 
 class SleepSummary(BaseModel):
@@ -225,7 +225,7 @@ class SleepSummary(BaseModel):
     available: bool = False
     total_minutes: Optional[int] = None
     last_night: Optional[int] = None  # minutes
-    last_updated: Optional[str] = None  # ISO 8601
+    last_updated: Optional[int] = None  # Epoch milliseconds
 
 
 class BloodPressureSummary(BaseModel):
@@ -238,7 +238,7 @@ class BloodPressureSummary(BaseModel):
     last_systolic: Optional[int] = None
     last_diastolic: Optional[int] = None
     last_pulse: Optional[int] = None
-    last_reading_time: Optional[str] = None  # ISO 8601
+    last_reading_time: Optional[int] = None  # Epoch milliseconds
     current_stage: Optional[str] = None  # See BP stages
     reading_count: int = 0
 
@@ -251,7 +251,7 @@ class PatientHealthSummaryResponse(BaseModel):
     blood_pressure: BloodPressureSummary = BloodPressureSummary()
     steps: StepsSummary = StepsSummary()
     sleep: SleepSummary = SleepSummary()
-    last_sync: Optional[str] = None  # ISO 8601
+    last_sync: Optional[int] = None  # Epoch milliseconds
     data_available: bool = False
 
 

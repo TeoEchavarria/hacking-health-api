@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from src._config.logger import get_logger
-from src.domains.health.adapters import normalize_timestamp, extract_date_from_timestamp, now_iso
+from src.domains.health.adapters import normalize_timestamp, timestamp_to_ms, extract_date_from_timestamp, now_iso
 from src.domains.health.classification import classify_blood_pressure, classify_heart_rate
 
 logger = get_logger(__name__)
@@ -259,11 +259,11 @@ class HealthService:
                 "min": hr_data.get("min"),
                 "max": hr_data.get("max"),
                 "last_reading": hr_data.get("average"),
-                "last_reading_time": normalize_timestamp(hr_data.get("timestamp")),
+                "last_reading_time": timestamp_to_ms(hr_data.get("timestamp")),
                 "current_category": hr_category["category"]
             }
             response["data_available"] = True
-            response["last_sync"] = normalize_timestamp(hr_data.get("timestamp"))
+            response["last_sync"] = timestamp_to_ms(hr_data.get("timestamp"))
         
         # Try to get blood pressure data
         bp_data = await self.db[BP_COLLECTION].find_one({
@@ -301,15 +301,16 @@ class HealthService:
                     "last_systolic": latest["systolic"],
                     "last_diastolic": latest["diastolic"],
                     "last_pulse": latest.get("pulse"),
-                    "last_reading_time": latest["timestamp"],
+                    "last_reading_time": timestamp_to_ms(latest["timestamp"]),
                     "current_stage": classification["stage"],
                     "reading_count": bp_count
                 }
                 response["data_available"] = True
                 
                 # Update last_sync if BP is more recent
-                if not response["last_sync"] or latest["timestamp"] > response["last_sync"]:
-                    response["last_sync"] = latest["timestamp"]
+                bp_ts_ms = timestamp_to_ms(latest["timestamp"])
+                if not response["last_sync"] or (bp_ts_ms and bp_ts_ms > response["last_sync"]):
+                    response["last_sync"] = bp_ts_ms
         
         # Try to get steps data
         steps_data = await self.db.health_metrics.find_one({
@@ -322,12 +323,12 @@ class HealthService:
             response["steps"] = {
                 "available": True,
                 "total": steps_data.get("value", 0),
-                "last_updated": normalize_timestamp(steps_data.get("timestamp"))
+                "last_updated": timestamp_to_ms(steps_data.get("timestamp"))
             }
             response["data_available"] = True
-            ts_iso = normalize_timestamp(steps_data.get("timestamp"))
-            if not response["last_sync"] or (ts_iso and ts_iso > response["last_sync"]):
-                response["last_sync"] = ts_iso
+            ts_ms = timestamp_to_ms(steps_data.get("timestamp"))
+            if not response["last_sync"] or (ts_ms and ts_ms > response["last_sync"]):
+                response["last_sync"] = ts_ms
         
         # Try to get sleep data
         sleep_data = await self.db.health_metrics.find_one({
@@ -341,12 +342,12 @@ class HealthService:
                 "available": True,
                 "total_minutes": sleep_data.get("value", 0),
                 "last_night": sleep_data.get("value", 0),
-                "last_updated": normalize_timestamp(sleep_data.get("timestamp"))
+                "last_updated": timestamp_to_ms(sleep_data.get("timestamp"))
             }
             response["data_available"] = True
-            ts_iso = normalize_timestamp(sleep_data.get("timestamp"))
-            if not response["last_sync"] or (ts_iso and ts_iso > response["last_sync"]):
-                response["last_sync"] = ts_iso
+            ts_ms = timestamp_to_ms(sleep_data.get("timestamp"))
+            if not response["last_sync"] or (ts_ms and ts_ms > response["last_sync"]):
+                response["last_sync"] = ts_ms
         
         # If no health_metrics data, check if there's any sensor_batches data
         if not response["data_available"]:
