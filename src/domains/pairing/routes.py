@@ -8,7 +8,9 @@ from src.domains.pairing.schemas import (
     ValidatePairingCodeRequest,
     ValidatePairingCodeResponse,
     PairingStatusResponse,
-    RevokePairingResponse
+    RevokePairingResponse,
+    MyPairingInfo,
+    MyPairingsResponse
 )
 from src.domains.pairing.services import PairingService
 from src.domains.auth.routes import verify_token_jwt
@@ -258,6 +260,59 @@ async def list_user_pairings(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al listar vinculaciones"
+        )
+
+
+@router.get(
+    "/me",
+    response_model=MyPairingsResponse,
+    summary="Get my active pairings",
+    description="Get all active pairings for the authenticated user, regardless of role."
+)
+async def get_my_pairings(
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database)
+):
+    """
+    Get all active pairings where the authenticated user is either patient or caregiver.
+    
+    This endpoint is designed for session initialization - it returns all active
+    relationships without requiring the caller to specify a role.
+    
+    Returns an empty array (not 404) if the user has no active pairings.
+    
+    **Authentication Required:** Bearer token in Authorization header
+    
+    **Returns:**
+    - pairings: List of active pairings with role and other user's info
+    - count: Number of active pairings
+    
+    Each pairing includes:
+    - pairingId: Unique identifier
+    - role: User's role in this pairing ("caregiver" or "patient")
+    - otherUserId: ID of the linked user
+    - otherUserName: Name of the linked user
+    - otherUserProfilePicture: Profile picture URL of the linked user (if available)
+    - status: Always "active" for this endpoint
+    - activatedAt: When the pairing was activated (ms timestamp)
+    - createdAt: When the pairing was created (ms timestamp)
+    """
+    try:
+        service = PairingService(db)
+        pairings = await service.get_my_pairings(user_id)
+        
+        logger.info(f"User {user_id} retrieved {len(pairings)} active pairings via /me")
+        
+        return MyPairingsResponse(
+            pairings=[MyPairingInfo(**p) for p in pairings],
+            count=len(pairings)
+        )
+    
+    except Exception as e:
+        logger.error(f"Error getting my pairings: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error al obtener vinculaciones"
         )
 
 

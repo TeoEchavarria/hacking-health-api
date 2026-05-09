@@ -78,3 +78,33 @@ class RevokePairingResponse(BaseModel):
     success: bool
     message: Optional[str] = None
     error: Optional[str] = None
+
+
+# =============================================================================
+# My Pairings (GET /me) Schemas
+# =============================================================================
+
+class MyPairingInfo(BaseModel):
+    """Information about a single pairing for the /me endpoint."""
+    pairing_id: str = Field(..., alias="pairingId")
+    role: str  # "caregiver" or "patient" - user's role in this pairing
+    other_user_id: str = Field(..., alias="otherUserId")
+    other_user_name: str = Field(..., alias="otherUserName")
+    other_user_profile_picture: Optional[str] = Field(None, alias="otherUserProfilePicture")
+    status: str  # Should always be "active" for this endpoint
+    activated_at: Optional[int] = Field(None, alias="activatedAt")
+    created_at: int = Field(..., alias="createdAt")
+    
+    class Config:
+        populate_by_name = True
+        allow_population_by_field_name = True
+
+
+class MyPairingsResponse(BaseModel):
+    """Response for GET /api/pairing/me - all active pairings for authenticated user."""
+    pairings: list[MyPairingInfo] = []
+    count: int = 0
+    
+    class Config:
+        populate_by_name = True
+        allow_population_by_field_name = True

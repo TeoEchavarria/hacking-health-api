@@ -297,6 +297,71 @@ class PairingService:
         
         return pairings
     
+    async def get_my_pairings(self, user_id: str) -> list:
+        """
+        Get all active pairings where user is either caregiver OR patient.
+        
+        This is the main method for session initialization - returns all
+        relationships regardless of role, with populated user info.
+        
+        Args:
+            user_id: ID of the authenticated user
+            
+        Returns:
+            List of pairing info dicts with role and other user details
+        """
+        # Find all active pairings where user is either patient or caregiver
+        cursor = self.collection.find({
+            "$or": [
+                {"patientId": user_id},
+                {"caregiverId": user_id}
+            ],
+            "status": "active"
+        })
+        pairings = await cursor.to_list(length=100)
+        
+        result = []
+        for pairing in pairings:
+            # Determine user's role in this pairing
+            is_caregiver = pairing.get("caregiverId") == user_id
+            role = "caregiver" if is_caregiver else "patient"
+            
+            # Get the other user's info
+            if is_caregiver:
+                other_user_id = pairing.get("patientId")
+                other_user_name = pairing.get("patientName", "Usuario")
+            else:
+                other_user_id = pairing.get("caregiverId")
+                other_user_name = pairing.get("caregiverName", "Cuidador")
+            
+            # Fetch other user's profile picture from users collection
+            other_user_profile_picture = None
+            if other_user_id:
+                try:
+                    other_user = await self.db.users.find_one({"_id": ObjectId(other_user_id)})
+                    if other_user:
+                        other_user_profile_picture = other_user.get("profile_picture")
+                except Exception as e:
+                    logger.warning(f"Could not fetch profile picture for user {other_user_id}: {e}")
+            
+            # Convert timestamps
+            created_at = pairing.get("createdAt")
+            activated_at = pairing.get("activatedAt")
+            
+            result.append({
+                "pairing_id": str(pairing["_id"]),
+                "role": role,
+                "other_user_id": other_user_id,
+                "other_user_name": other_user_name,
+                "other_user_profile_picture": other_user_profile_picture,
+                "status": pairing["status"],
+                "activated_at": int(activated_at.timestamp() * 1000) if activated_at else None,
+                "created_at": int(created_at.timestamp() * 1000) if created_at else 0
+            })
+        
+        logger.info(f"Retrieved {len(result)} active pairings for user {user_id}")
+        return result
+    
     async def revoke_pairing(
         self,
         pairing_id: str,
