@@ -10,6 +10,7 @@ from src.domains.medications.routes import router as medications_router
 from src.domains.notifications.routes import router as notifications_router
 from src.domains.location.routes import router as location_router
 from src.domains.drawing_challenges.routes import router as drawing_challenges_router
+from src.domains.events.routes import router as events_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -130,6 +131,20 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for alerts: {e}")
     
+    # Create indexes for biometric_events collection
+    try:
+        await database.biometric_events.create_index([("patientId", 1), ("recordedAt", -1)])
+        await database.biometric_events.create_index([("caregiverId", 1), ("recordedAt", -1)])
+        await database.biometric_events.create_index([("patientId", 1), ("readByPatient", 1)])
+        await database.biometric_events.create_index([("caregiverId", 1), ("readByCaregiver", 1)])
+        # TTL index: auto-delete events older than 30 days
+        await database.biometric_events.create_index(
+            "createdAt",
+            expireAfterSeconds=30 * 24 * 60 * 60  # 30 days
+        )
+    except Exception as e:
+        logger.warning(f"Could not create indexes for biometric_events: {e}")
+    
     # NOTE: Pairing cleanup code removed - was deleting active connections on every deployment
     # If you need to clean up test data, do it manually via MongoDB console
 
@@ -161,6 +176,7 @@ app.include_router(medications_router)
 app.include_router(notifications_router)
 app.include_router(location_router)
 app.include_router(drawing_challenges_router)
+app.include_router(events_router)
 
 @app.get("/")
 async def root():

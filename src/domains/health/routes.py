@@ -19,6 +19,8 @@ from src.domains.health.classification import classify_blood_pressure, detect_cr
 from src.domains.health.pipeline import BloodPressurePipeline
 from src.domains.health.alert_generator import AlertGenerator
 from src.domains.health.voice_parsing import get_voice_parsing_service
+from src.domains.events.services import BiometricEventService
+from src.domains.events.schemas import BiometricEventType
 from src.domains.auth.routes import verify_token_jwt
 from src._config.logger import get_logger
 from src.core.database import get_database
@@ -244,6 +246,44 @@ async def upload_health_metrics(
         service = HealthService(db)
         result = await service.ingest_health_metrics(metrics)
         
+        # Register biometric events for notifications (fire-and-forget)
+        try:
+            event_service = BiometricEventService(db)
+            
+            # Steps summary event
+            if metrics.steps is not None:
+                await event_service.register_biometric_event(
+                    patient_id=user_id,
+                    event_type=BiometricEventType.STEPS_SUMMARY.value,
+                    payload={"steps": metrics.steps, "date": metrics.date}
+                )
+            
+            # Sleep summary event
+            if metrics.sleep_minutes is not None:
+                await event_service.register_biometric_event(
+                    patient_id=user_id,
+                    event_type=BiometricEventType.SLEEP_SUMMARY.value,
+                    payload={"sleep_minutes": metrics.sleep_minutes, "date": metrics.date}
+                )
+            
+            # Heart rate alert (if out of normal range)
+            if metrics.avg_heart_rate is not None:
+                hr_payload = {
+                    "average": metrics.avg_heart_rate,
+                    "min": metrics.min_heart_rate,
+                    "max": metrics.max_heart_rate,
+                    "date": metrics.date
+                }
+                # Only create event if HR is out of normal range (50-100 bpm)
+                if metrics.avg_heart_rate < 50 or metrics.avg_heart_rate > 100:
+                    await event_service.register_biometric_event(
+                        patient_id=user_id,
+                        event_type=BiometricEventType.HEART_RATE_ALERT.value,
+                        payload=hr_payload
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to register biometric events: {e}")
+        
         return result
         
     except HTTPException:
@@ -458,6 +498,24 @@ async def upload_blood_pressure(
             user_id=reading.user_id,
             reading=stored
         )
+        
+        # Register biometric event for notifications (fire-and-forget)
+        try:
+            event_service = BiometricEventService(db)
+            await event_service.register_biometric_event(
+                patient_id=reading.user_id,
+                event_type=BiometricEventType.WATCH_MEASUREMENT.value,
+                payload={
+                    "systolic": reading.systolic,
+                    "diastolic": reading.diastolic,
+                    "pulse": reading.pulse,
+                    "stage": classification["stage"],
+                    "severity": classification["severity"],
+                    "source": reading.source
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to register blood pressure event: {e}")
         
         return {
             "success": True,
@@ -697,6 +755,25 @@ async def parse_bp_audio(
             f"Audio parse result: S={result.get('systolic')} D={result.get('diastolic')} "
             f"P={result.get('pulse')} conf={result.get('confidence')}"
         )
+        
+        # Register voice measurement event for notifications
+        try:
+            from src.core.database import db as db_instance
+            database = db_instance.get_db()
+            event_service = BiometricEventService(database)
+            await event_service.register_biometric_event(
+                patient_id=user_id,
+                event_type=BiometricEventType.VOICE_MEASUREMENT.value,
+                payload={
+                    "transcription": result.get("transcription", ""),
+                    "systolic": result.get("systolic"),
+                    "diastolic": result.get("diastolic"),
+                    "pulse": result.get("pulse"),
+                    "confidence": result.get("confidence", "low")
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to register voice measurement event: {e}")
         
         return AudioParseResult(
             systolic=result.get("systolic"),
