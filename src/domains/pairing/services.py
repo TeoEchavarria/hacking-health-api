@@ -322,45 +322,49 @@ class PairingService:
         
         result = []
         for pairing in pairings:
-            # Determine user's role in this pairing
-            is_caregiver = pairing.get("caregiverId") == user_id
-            role = "caregiver" if is_caregiver else "patient"
-            
-            # Get the other user's info
-            if is_caregiver:
-                other_user_id = pairing.get("patientId")
-                other_user_name = pairing.get("patientName", "Usuario")
-            else:
-                other_user_id = pairing.get("caregiverId")
-                other_user_name = pairing.get("caregiverName", "Cuidador")
-            
-            # Fetch other user's profile picture from users collection
-            other_user_profile_picture = None
-            if other_user_id:
-                try:
-                    other_user = await self.db.users.find_one({"_id": ObjectId(other_user_id)})
-                    if other_user:
-                        other_user_profile_picture = other_user.get("profile_picture")
-                except Exception as e:
-                    logger.warning(f"Could not fetch profile picture for user {other_user_id}: {e}")
-            
-            # Convert timestamps
-            created_at = pairing.get("createdAt")
-            activated_at = pairing.get("activatedAt")
-            
-            result.append({
-                "pairing_id": str(pairing["_id"]),
-                "role": role,
-                "other_user_id": other_user_id,
-                "other_user_name": other_user_name,
-                "other_user_profile_picture": other_user_profile_picture,
-                "status": pairing["status"],
-                "activated_at": int(activated_at.timestamp() * 1000) if activated_at else None,
-                "created_at": int(created_at.timestamp() * 1000) if created_at else 0
-            })
+            result.append(await self._format_my_pairing(pairing, user_id))
         
         logger.info(f"Retrieved {len(result)} active pairings for user {user_id}")
         return result
+    
+    async def _format_my_pairing(self, pairing: dict, user_id: str) -> dict:
+        """Format a pairing document for the /me endpoint response."""
+        # Determine user's role in this pairing
+        is_caregiver = pairing.get("caregiverId") == user_id
+        role = "caregiver" if is_caregiver else "patient"
+        
+        # Get the other user's info
+        other_user_id = pairing.get("patientId") if is_caregiver else pairing.get("caregiverId")
+        other_user_name = pairing.get("patientName", "Usuario") if is_caregiver else pairing.get("caregiverName", "Cuidador")
+        
+        # Fetch other user's profile picture
+        other_user_profile_picture = await self._get_user_profile_picture(other_user_id)
+        
+        # Convert timestamps
+        created_at = pairing.get("createdAt")
+        activated_at = pairing.get("activatedAt")
+        
+        return {
+            "pairing_id": str(pairing["_id"]),
+            "role": role,
+            "other_user_id": other_user_id,
+            "other_user_name": other_user_name,
+            "other_user_profile_picture": other_user_profile_picture,
+            "status": pairing["status"],
+            "activated_at": int(activated_at.timestamp() * 1000) if activated_at else None,
+            "created_at": int(created_at.timestamp() * 1000) if created_at else 0
+        }
+    
+    async def _get_user_profile_picture(self, user_id: str) -> Optional[str]:
+        """Fetch a user's profile picture from the users collection."""
+        if not user_id:
+            return None
+        try:
+            user = await self.db.users.find_one({"_id": ObjectId(user_id)})
+            return user.get("profile_picture") if user else None
+        except Exception as e:
+            logger.warning(f"Could not fetch profile picture for user {user_id}: {e}")
+            return None
     
     async def revoke_pairing(
         self,
