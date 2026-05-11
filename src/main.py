@@ -92,7 +92,7 @@ async def startup_db_client():
     except Exception as e:
         logger.warning(f"Could not create indexes for health_tips: {e}")
     
-    # Create indexes for locations collection
+    # Create indexes for locations collection (history)
     try:
         await database.locations.create_index("userId")
         await database.locations.create_index([("userId", 1), ("createdAt", -1)])
@@ -104,6 +104,13 @@ async def startup_db_client():
         )
     except Exception as e:
         logger.warning(f"Could not create indexes for locations: {e}")
+    
+    # Create geospatial index for users.lastLocation (GeoJSON Point)
+    try:
+        await database.users.create_index([("lastLocation", "2dsphere")])
+        logger.info("Created 2dsphere index on users.lastLocation")
+    except Exception as e:
+        logger.warning(f"Could not create 2dsphere index for users.lastLocation: {e}")
     
     # Create indexes for blood_pressure_readings collection
     try:

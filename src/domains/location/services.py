@@ -10,6 +10,7 @@ logger = get_logger(__name__)
 
 COLLECTION_NAME = "locations"
 LOCATION_TTL_DAYS = 7
+LOCATION_STALE_MINUTES = 15  # Mark location as stale after 15 minutes
 
 
 class LocationService:
@@ -28,12 +29,18 @@ class LocationService:
         client_timestamp: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Update or insert user's current location.
+        Update user's current location using upsert on User document.
+        
+        This method:
+        1. Updates lastLocation embedded in the User document (primary source)
+        2. Optionally inserts into locations collection for history (with TTL)
+        
+        GeoJSON format: coordinates are [longitude, latitude] (lng first!)
         
         Args:
             user_id: ID of the user
-            latitude: Latitude coordinate
-            longitude: Longitude coordinate
+            latitude: Latitude coordinate (-90 to 90)
+            longitude: Longitude coordinate (-180 to 180)
             accuracy: GPS accuracy in meters
             client_timestamp: Client-side timestamp in milliseconds
             
@@ -47,7 +54,22 @@ class LocationService:
         if client_timestamp:
             client_dt = datetime.fromtimestamp(client_timestamp / 1000, tz=timezone.utc)
         
-        location_doc = {
+        # GeoJSON Point format: coordinates are [longitude, latitude]
+        last_location = {
+            "type": "Point",
+            "coordinates": [longitude, latitude],  # GeoJSON: lng first, lat second
+            "accuracy": accuracy,
+            "updatedAt": now
+        }
+        
+        # Update User document with lastLocation (upsert pattern - no document growth)
+        await self.db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"lastLocation": last_location}}
+        )
+        
+        # Also insert into history collection (for tracking/analytics, auto-expires via TTL)
+        history_doc = {
             "userId": user_id,
             "latitude": latitude,
             "longitude": longitude,
@@ -55,8 +77,7 @@ class LocationService:
             "clientTimestamp": client_dt,
             "createdAt": now
         }
-        
-        await self.collection.insert_one(location_doc)
+        await self.collection.insert_one(history_doc)
         
         logger.info(f"Updated location for user {user_id}: ({latitude}, {longitude})")
         
@@ -65,9 +86,26 @@ class LocationService:
             "updated_at": int(now.timestamp() * 1000)
         }
     
+    async def get_user_with_location(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get user document with lastLocation.
+        
+        Args:
+            user_id: ID of the user
+            
+        Returns:
+            User document with name, avatar, lastLocation, sharingLocation, role
+        """
+        user = await self.db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {"name": 1, "profilePicture": 1, "lastLocation": 1, "sharingLocation": 1, "role": 1}
+        )
+        return user
+    
     async def get_latest_location(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get the most recent location for a user.
+        Get the most recent location for a user from history collection.
+        (Legacy method for backwards compatibility)
         
         Args:
             user_id: ID of the user
@@ -83,18 +121,56 @@ class LocationService:
     
     async def get_paired_user_location(self, user_id: str) -> Dict[str, Any]:
         """
-        Get the location of the user's paired partner.
+        Get locations of both self and paired partner.
         
-        This checks both directions:
-        - If current user is patient, find their caregiver's location
-        - If current user is caregiver, find their patient's location
+        Returns self.location and partner.location with metadata including:
+        - locationStale: true if location is older than 15 minutes
+        - lastSeenAt: timestamp of last location update
+        - role: 'patient' or 'caregiver'
+        
+        This allows the app to:
+        - Show both markers on the map
+        - Display stale warning for outdated locations
+        - Handle cases where partner disabled sharing
         
         Args:
             user_id: ID of the requesting user
             
         Returns:
-            Dict with found status and location (if found)
+            Dict with self and partner location data
         """
+        now = datetime.now(timezone.utc)
+        
+        # Get current user data
+        current_user = await self.get_user_with_location(user_id)
+        if not current_user:
+            return {
+                "self": None,
+                "partner": None,
+                "message": "Usuario no encontrado"
+            }
+        
+        # Build self location data
+        self_location = None
+        if current_user.get("lastLocation"):
+            loc = current_user["lastLocation"]
+            coordinates = loc.get("coordinates", [])
+            if len(coordinates) == 2:
+                self_location = {
+                    "latitude": coordinates[1],  # GeoJSON: [lng, lat]
+                    "longitude": coordinates[0],
+                    "accuracy": loc.get("accuracy"),
+                    "updatedAt": int(loc["updatedAt"].timestamp() * 1000) if loc.get("updatedAt") else None
+                }
+        
+        self_data = {
+            "name": current_user.get("name", "Yo"),
+            "avatar": current_user.get("profilePicture"),
+            "role": current_user.get("role", "patient"),
+            "location": self_location,
+            "sharingEnabled": current_user.get("sharingLocation", True)
+        }
+        
         # Find active pairing where user is either patient or caregiver
         pairing = await self.db.pairings.find_one({
             "$or": [
@@ -105,59 +181,96 @@ class LocationService:
         
         if not pairing:
             return {
-                "found": False,
+                "self": self_data,
+                "partner": None,
+                "hasRelation": False,
                 "message": "No tienes un usuario vinculado activo"
             }
         
-        # Determine paired user ID
+        # Determine partner info based on current user's role in pairing
         if pairing["patientId"] == user_id:
+            # Current user is patient, partner is caregiver
             paired_user_id = pairing.get("caregiverId")
-            paired_user_name = pairing.get("caregiverName", "Cuidador")
+            default_partner_name = pairing.get("caregiverName", "Cuidador")
+            partner_role = "caregiver"
         else:
+            # Current user is caregiver, partner is patient
             paired_user_id = pairing["patientId"]
-            paired_user_name = pairing.get("patientName", "Paciente")
+            default_partner_name = pairing.get("patientName", "Paciente")
+            partner_role = "patient"
         
         if not paired_user_id:
             return {
-                "found": False,
+                "self": self_data,
+                "partner": None,
+                "hasRelation": True,
                 "message": "Usuario vinculado no disponible"
             }
         
-        # Check if paired user has sharing enabled
-        paired_user = await self.db.users.find_one({"_id": ObjectId(paired_user_id)})
-        if paired_user and not paired_user.get("sharingLocation", True):
+        # Get partner user data
+        partner_user = await self.get_user_with_location(paired_user_id)
+        
+        if not partner_user:
             return {
-                "found": False,
-                "message": "El usuario vinculado ha desactivado compartir ubicación"
+                "self": self_data,
+                "partner": {
+                    "name": default_partner_name,
+                    "avatar": None,
+                    "role": partner_role,
+                    "location": None,
+                    "locationStale": False,
+                    "lastSeenAt": None,
+                    "sharingEnabled": True,
+                    "sharingDisabledMessage": None
+                },
+                "hasRelation": True
             }
         
-        # Get paired user's latest location
-        location = await self.get_latest_location(paired_user_id)
+        # Check if partner has sharing enabled
+        partner_sharing_enabled = partner_user.get("sharingLocation", True)
         
-        if not location:
-            return {
-                "found": False,
-                "message": "No hay ubicación disponible del usuario vinculado"
-            }
+        # Build partner location data
+        partner_location = None
+        location_stale = False
+        last_seen_at = None
+        sharing_disabled_message = None
         
-        # Check if location is recent (within last 30 minutes)
-        location_age = datetime.now(timezone.utc) - location["createdAt"]
-        if location_age > timedelta(minutes=30):
-            return {
-                "found": False,
-                "message": "La última ubicación conocida es muy antigua"
-            }
+        if not partner_sharing_enabled:
+            sharing_disabled_message = "Este usuario ha desactivado compartir ubicación"
+        elif partner_user.get("lastLocation"):
+            loc = partner_user["lastLocation"]
+            coordinates = loc.get("coordinates", [])
+            updated_at = loc.get("updatedAt")
+            
+            if len(coordinates) == 2 and updated_at:
+                partner_location = {
+                    "latitude": coordinates[1],  # GeoJSON: [lng, lat]
+                    "longitude": coordinates[0],
+                    "accuracy": loc.get("accuracy"),
+                    "updatedAt": int(updated_at.timestamp() * 1000)
+                }
+                last_seen_at = int(updated_at.timestamp() * 1000)
+                
+                # Check if location is stale (> 15 minutes old)
+                location_age = now - updated_at
+                if location_age > timedelta(minutes=LOCATION_STALE_MINUTES):
+                    location_stale = True
+        
+        partner_data = {
+            "name": partner_user.get("name") or default_partner_name,
+            "avatar": partner_user.get("profilePicture"),
+            "role": partner_role,
+            "location": partner_location,
+            "locationStale": location_stale,
+            "lastSeenAt": last_seen_at,
+            "sharingEnabled": partner_sharing_enabled,
+            "sharingDisabledMessage": sharing_disabled_message
+        }
         
         return {
-            "found": True,
-            "location": {
-                "user_id": paired_user_id,
-                "user_name": paired_user_name,
-                "latitude": location["latitude"],
-                "longitude": location["longitude"],
-                "accuracy": location.get("accuracy"),
-                "updated_at": int(location["createdAt"].timestamp() * 1000)
-            }
+            "self": self_data,
+            "partner": partner_data,
+            "hasRelation": True
         }
     
     async def toggle_sharing(self, user_id: str, enabled: bool) -> Dict[str, Any]:

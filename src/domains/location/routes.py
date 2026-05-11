@@ -9,7 +9,11 @@ from src.domains.location.schemas import (
     LocationResponse,
     SharingToggleRequest,
     SharingStatusResponse,
-    LocationHistoryResponse
+    LocationHistoryResponse,
+    RelationLocationsResponse,
+    UserLocationInfo,
+    PartnerLocationInfo,
+    LocationCoordinates
 )
 from src.domains.location.services import LocationService
 from src.domains.auth.routes import verify_token_jwt
@@ -80,52 +84,86 @@ async def update_location(
 
 @router.get(
     "/paired",
-    response_model=PairedLocationResponse,
-    summary="Get paired user's location",
-    description="Get the current location of the user you are paired with (caregiver or patient)."
+    response_model=RelationLocationsResponse,
+    summary="Get self and paired user locations",
+    description="Get both your location and your paired user's location for map display."
 )
 async def get_paired_location(
     user_id: str = Depends(verify_token_jwt),
     db=Depends(get_database)
 ):
     """
-    Get the location of the paired user (caregiver or patient).
+    Get location data for both self and paired user.
     
-    This checks the active pairing relationship and returns the
-    partner's most recent location if:
-    - An active pairing exists
-    - The paired user has sharing enabled
-    - The location is recent (within 30 minutes)
+    This returns a comprehensive response including:
+    - self: Your own location info
+    - partner: Paired user's location with stale detection
+    - hasRelation: Whether you have an active pairing
+    - message: Optional explanation
     
     **Authentication Required:** Bearer token in Authorization header
     
     **Returns:**
-    - found: Boolean indicating if location is available
-    - location: Location data (if found)
-    - message: Explanation (if not found)
+    - self: UserLocationInfo with name, avatar, role, location, sharingEnabled
+    - partner: PartnerLocationInfo with locationStale flag (true if > 15 min old)
+    - hasRelation: Boolean indicating if an active pairing exists
+    - message: Explanation (if no relation or error)
     """
     try:
         service = LocationService(db)
         result = await service.get_paired_user_location(user_id)
         
-        if result["found"]:
-            loc = result["location"]
-            return PairedLocationResponse(
-                found=True,
-                location=LocationResponse(
-                    userId=loc["user_id"],
-                    userName=loc["user_name"],
+        # Build self info
+        self_info = None
+        if result.get("self"):
+            s = result["self"]
+            self_location = None
+            if s.get("location"):
+                loc = s["location"]
+                self_location = LocationCoordinates(
                     latitude=loc["latitude"],
                     longitude=loc["longitude"],
                     accuracy=loc.get("accuracy"),
-                    updatedAt=loc["updated_at"]
+                    updatedAt=loc.get("updatedAt")
                 )
+            self_info = UserLocationInfo(
+                name=s["name"],
+                avatar=s.get("avatar"),
+                role=s.get("role", "patient"),
+                location=self_location,
+                sharingEnabled=s.get("sharingEnabled", True)
             )
-        else:
-            return PairedLocationResponse(
-                found=False,
-                message=result.get("message")
+        
+        # Build partner info
+        partner_info = None
+        if result.get("partner"):
+            p = result["partner"]
+            partner_location = None
+            if p.get("location"):
+                loc = p["location"]
+                partner_location = LocationCoordinates(
+                    latitude=loc["latitude"],
+                    longitude=loc["longitude"],
+                    accuracy=loc.get("accuracy"),
+                    updatedAt=loc.get("updatedAt")
+                )
+            partner_info = PartnerLocationInfo(
+                name=p["name"],
+                avatar=p.get("avatar"),
+                role=p.get("role", "patient"),
+                location=partner_location,
+                locationStale=p.get("locationStale", False),
+                lastSeenAt=p.get("lastSeenAt"),
+                sharingEnabled=p.get("sharingEnabled", True),
+                sharingDisabledMessage=p.get("sharingDisabledMessage")
             )
+        
+        return RelationLocationsResponse(
+            self_info=self_info,
+            partner=partner_info,
+            hasRelation=result.get("hasRelation", False),
+            message=result.get("message")
+        )
     
     except Exception as e:
         logger.error(f"Error getting paired location for user {user_id}: {e}")
