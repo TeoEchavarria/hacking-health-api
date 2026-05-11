@@ -174,6 +174,9 @@ class BiometricEventService:
             patient = await self.db.users.find_one({"_id": ObjectId(patient_id)})
             if patient:
                 patient_name = patient.get("name", "Tu persona cuidada")
+                logger.info(f"[PUSH] Patient found: {patient_id}, name: {patient_name}")
+            else:
+                logger.warning(f"[PUSH] Patient NOT found in users: {patient_id}")
             
             # Find active pairing
             pairing = await self.db.pairings.find_one({
@@ -181,15 +184,22 @@ class BiometricEventService:
                 "status": "active"
             })
             
-            if pairing and pairing.get("caregiverId"):
-                caregiver_id = pairing["caregiverId"]
-                # Get caregiver's FCM token
-                caregiver = await self.db.users.find_one({"_id": ObjectId(caregiver_id)})
-                if caregiver:
-                    caregiver_fcm_token = caregiver.get("fcmToken")
+            if pairing:
+                logger.info(f"[PUSH] Active pairing found: caregiverId={pairing.get('caregiverId')}")
+                if pairing.get("caregiverId"):
+                    caregiver_id = pairing["caregiverId"]
+                    # Get caregiver's FCM token
+                    caregiver = await self.db.users.find_one({"_id": ObjectId(caregiver_id)})
+                    if caregiver:
+                        caregiver_fcm_token = caregiver.get("fcmToken")
+                        logger.info(f"[PUSH] Caregiver {caregiver_id} has FCM token: {bool(caregiver_fcm_token)}")
+                    else:
+                        logger.warning(f"[PUSH] Caregiver NOT found in users: {caregiver_id}")
+            else:
+                logger.info(f"[PUSH] No active pairing for patient: {patient_id}")
                     
         except Exception as e:
-            logger.warning(f"Error finding pairing for patient {patient_id}: {e}")
+            logger.warning(f"[PUSH] Error finding pairing for patient {patient_id}: {e}")
         
         # 2. Build message and determine severity
         message = build_event_message(event_type, payload)
@@ -225,21 +235,26 @@ class BiometricEventService:
                     "info": "📊 Nueva medición registrada"
                 }
                 push_title = title_map.get(severity, "Nueva alerta de tu persona cuidada")
+                push_body = f"{patient_name}: {message}" if patient_name else message
                 
-                await send_health_alert_push(
+                logger.info(f"[PUSH] Sending to caregiver {caregiver_id}: title='{push_title}', body='{push_body[:50]}...'")
+                
+                result = await send_health_alert_push(
                     fcm_tokens=[caregiver_fcm_token],
                     alert_type=event_type,
                     title=push_title,
-                    body=f"{patient_name}: {message}" if patient_name else message,
+                    body=push_body,
                     patient_id=patient_id,
                     patient_name=patient_name,
                     severity=severity,
                     is_caregiver_notification=True
                 )
-                logger.info(f"Push notification sent to caregiver {caregiver_id}")
+                logger.info(f"[PUSH] Result: {result}")
             except Exception as e:
                 # Don't fail event creation if push fails
-                logger.error(f"Failed to send push notification: {e}")
+                logger.error(f"[PUSH] Failed to send notification: {e}", exc_info=True)
+        else:
+            logger.info(f"[PUSH] Skipping push: caregiver_id={caregiver_id}, has_token={bool(caregiver_fcm_token)}")
         
         return event_doc
     
