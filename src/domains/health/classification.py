@@ -5,147 +5,26 @@ These functions are stateless and have no side effects, making them
 easily unit-testable and portable to other platforms (e.g., Kotlin for mobile).
 
 Clinical thresholds follow AHA/ACC 2025 guidelines.
+
+Classification functions now use Strategy Pattern (see strategies/ module)
+following the Open-Closed Principle for easy extensibility.
 """
 from typing import Dict, Optional, Tuple
 from datetime import datetime, timezone, timedelta
 
-
-# =========================================
-# Blood Pressure Classification (AHA/ACC 2025)
-# =========================================
-
-BP_STAGES = {
-    "hypertensive_crisis": {
-        "label": "Hypertensive Crisis",
-        "severity": "urgent",
-        "guideline": "AHA/ACC 2025"
-    },
-    "hypertension_stage_2": {
-        "label": "Stage 2 Hypertension",
-        "severity": "high",
-        "guideline": "AHA/ACC 2025"
-    },
-    "hypertension_stage_1": {
-        "label": "Stage 1 Hypertension",
-        "severity": "moderate",
-        "guideline": "AHA/ACC 2025"
-    },
-    "elevated": {
-        "label": "Elevated Blood Pressure",
-        "severity": "info",
-        "guideline": "AHA/ACC 2025"
-    },
-    "normal": {
-        "label": "Normal Blood Pressure",
-        "severity": "info",
-        "guideline": "AHA/ACC 2025"
-    }
-}
+# Import classification strategies (Strategy Pattern)
+from .strategies.bp_classification import classify_blood_pressure
+from .strategies.hr_classification import classify_heart_rate
 
 
-def classify_blood_pressure(systolic: int, diastolic: int) -> Dict[str, str]:
-    """
-    Classify blood pressure reading according to AHA/ACC 2025 guidelines.
-    
-    Args:
-        systolic: Systolic blood pressure in mmHg
-        diastolic: Diastolic blood pressure in mmHg
-        
-    Returns:
-        Dict with keys: stage, severity, label, guideline
-        
-    Stages (evaluated in order, first match wins):
-        - hypertensive_crisis: SBP > 180 OR DBP > 120
-        - hypertension_stage_2: SBP >= 140 OR DBP >= 90
-        - hypertension_stage_1: SBP 130-139 OR DBP 80-89
-        - elevated: SBP 120-129 AND DBP < 80
-        - normal: SBP < 120 AND DBP < 80
-    """
-    # Hypertensive Crisis
-    if systolic > 180 or diastolic > 120:
-        stage = "hypertensive_crisis"
-    # Stage 2 Hypertension
-    elif systolic >= 140 or diastolic >= 90:
-        stage = "hypertension_stage_2"
-    # Stage 1 Hypertension
-    elif (130 <= systolic <= 139) or (80 <= diastolic <= 89):
-        stage = "hypertension_stage_1"
-    # Elevated
-    elif (120 <= systolic <= 129) and diastolic < 80:
-        stage = "elevated"
-    # Normal
-    else:
-        stage = "normal"
-    
-    return {
-        "stage": stage,
-        "severity": BP_STAGES[stage]["severity"],
-        "label": BP_STAGES[stage]["label"],
-        "guideline": BP_STAGES[stage]["guideline"]
-    }
-
-
-# =========================================
-# Heart Rate Classification
-# =========================================
-
-HR_CATEGORIES = {
-    "critical_bradycardia": {
-        "label": "Critical Bradycardia",
-        "severity": "urgent"
-    },
-    "bradycardia": {
-        "label": "Bradycardia",
-        "severity": "moderate"
-    },
-    "normal": {
-        "label": "Normal Heart Rate",
-        "severity": "info"
-    },
-    "tachycardia": {
-        "label": "Tachycardia",
-        "severity": "moderate"
-    },
-    "critical_tachycardia": {
-        "label": "Critical Tachycardia",
-        "severity": "urgent"
-    }
-}
-
-
-def classify_heart_rate(bpm: int) -> Dict[str, str]:
-    """
-    Classify heart rate reading for adult resting heart rate.
-    
-    Args:
-        bpm: Heart rate in beats per minute
-        
-    Returns:
-        Dict with keys: category, severity, label
-        
-    Categories:
-        - critical_bradycardia: BPM < 40
-        - bradycardia: BPM 40-59
-        - normal: BPM 60-100
-        - tachycardia: BPM 101-150
-        - critical_tachycardia: BPM > 150
-    """
-    if bpm < 40:
-        category = "critical_bradycardia"
-    elif bpm < 60:
-        category = "bradycardia"
-    elif bpm <= 100:
-        category = "normal"
-    elif bpm <= 150:
-        category = "tachycardia"
-    else:
-        category = "critical_tachycardia"
-    
-    return {
-        "category": category,
-        "severity": HR_CATEGORIES[category]["severity"],
-        "label": HR_CATEGORIES[category]["label"]
-    }
+# Re-export for backward compatibility
+__all__ = [
+    'classify_blood_pressure',
+    'classify_heart_rate',
+    'validate_bp_reading',
+    'validate_heart_rate_reading',
+    'detect_crisis'
+]
 
 
 # =========================================
