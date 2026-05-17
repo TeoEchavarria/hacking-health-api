@@ -6,12 +6,41 @@ Supports both text transcriptions and audio files (via Whisper STT).
 """
 import os
 import re
+import io
 import json
+import tempfile
 from openai import AsyncOpenAI
-from typing import Optional, BinaryIO
+from typing import Optional, BinaryIO, Tuple
 from src._config.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Optional audio processing dependencies (pydub + ffmpeg).
+# If unavailable, the audio trim step is skipped and the original audio
+# is forwarded to Whisper unchanged.
+try:
+    from pydub import AudioSegment
+    from pydub.silence import detect_leading_silence
+    _PYDUB_AVAILABLE = True
+except Exception as _pydub_err:  # pragma: no cover - import-time guard
+    AudioSegment = None  # type: ignore
+    detect_leading_silence = None  # type: ignore
+    _PYDUB_AVAILABLE = False
+    logger.warning(f"pydub not available - audio trimming disabled: {_pydub_err}")
+
+
+# Mapping of HTTP content types to pydub format strings
+_CONTENT_TYPE_TO_FORMAT = {
+    "audio/mp4": "mp4",
+    "audio/m4a": "mp4",   # pydub uses "mp4" container for M4A
+    "audio/x-m4a": "mp4",
+    "audio/3gpp": "3gpp",
+    "audio/aac": "aac",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/webm": "webm",
+}
 
 # System prompt for BP extraction
 BP_EXTRACTION_PROMPT = """You are a medical assistant that extracts blood pressure readings from patient voice transcriptions.
@@ -182,48 +211,252 @@ class VoiceParsingService:
             "confidence": result.get("confidence", "low")
         }
     
-    async def transcribe_audio(self, audio_content: bytes, filename: str) -> str:
+    async def transcribe_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> Tuple[str, dict]:
         """
         Transcribe audio to text using OpenAI Whisper.
-        
+
+        Applies leading-silence trimming with pydub (if available) before
+        sending to Whisper, to reduce API cost and latency. If trimming
+        fails for any reason, the original audio is forwarded unchanged.
+
         Args:
-            audio_content: Audio file bytes
-            filename: Original filename (for format detection)
-            
+            audio_content: Audio file bytes (M4A, 3GP, MP3, WAV, ...)
+            filename: Original filename (used as fallback for format detection)
+            content_type: HTTP content type of the upload (preferred for format detection)
+
         Returns:
-            Transcribed text in Spanish
+            Tuple of (transcription_text, metadata_dict). The metadata dict
+            contains the following keys (all ints, all in milliseconds):
+              - audio_original_duration_ms
+              - audio_trimmed_duration_ms
+              - silence_removed_ms
+            When trimming is not applied (pydub missing or fallback), the
+            three values are equal/zero, but the keys are always present.
         """
         if not self.client:
             raise ValueError("OpenAI client not configured - cannot transcribe audio")
-        
-        logger.info(f"Transcribing audio file: {filename}, size: {len(audio_content)} bytes")
-        
+
+        logger.info(
+            f"Transcribing audio file: {filename}, size: {len(audio_content)} bytes, "
+            f"content_type={content_type}"
+        )
+
+        # Default metadata (used when trim is skipped or fails)
+        metadata = {
+            "audio_original_duration_ms": 0,
+            "audio_trimmed_duration_ms": 0,
+            "silence_removed_ms": 0,
+        }
+
+        send_bytes = audio_content
+        send_filename = filename
+
+        # Best-effort audio trim: load + detect silence + re-export. On any
+        # failure, fall back silently to the original audio.
+        if _PYDUB_AVAILABLE:
+            try:
+                audio_segment = self._load_audio_from_bytes(audio_content, content_type, filename)
+                original_duration_ms = len(audio_segment)
+                metadata["audio_original_duration_ms"] = original_duration_ms
+
+                threshold = self._detect_noise_floor(audio_segment)
+                trimmed, removed_ms = self._trim_leading_silence(
+                    audio_segment,
+                    silence_threshold_dbfs=threshold,
+                )
+
+                metadata["audio_trimmed_duration_ms"] = len(trimmed)
+                metadata["silence_removed_ms"] = removed_ms
+
+                if removed_ms > 0:
+                    logger.info(
+                        f"Trim applied: removed {removed_ms}ms of leading silence "
+                        f"({original_duration_ms}ms -> {len(trimmed)}ms, "
+                        f"threshold={threshold:.1f} dBFS)"
+                    )
+                    send_bytes, send_filename = self._export_audio_for_whisper(trimmed)
+                else:
+                    logger.info(
+                        f"No silence trim applied (threshold={threshold:.1f} dBFS, "
+                        f"duration={original_duration_ms}ms)"
+                    )
+            except Exception as e:
+                logger.warning(
+                    f"Audio trim failed, sending original audio to Whisper: {e}"
+                )
+                # Reset metadata to safe defaults on failure
+                metadata = {
+                    "audio_original_duration_ms": 0,
+                    "audio_trimmed_duration_ms": 0,
+                    "silence_removed_ms": 0,
+                }
+                send_bytes = audio_content
+                send_filename = filename
+
         # Whisper API accepts file tuples
         response = await self.client.audio.transcriptions.create(
             model="whisper-1",
-            file=(filename, audio_content),
+            file=(send_filename, send_bytes),
             language="es",  # Spanish
             response_format="text"
         )
-        
+
         transcription = response.strip() if isinstance(response, str) else str(response).strip()
         logger.info(f"Transcription result ({len(transcription)} chars): {transcription[:100]}...")
-        return transcription
-    
-    async def parse_audio(self, audio_content: bytes, filename: str) -> dict:
+        return transcription, metadata
+
+    # ------------------------------------------------------------------
+    # Audio processing helpers (pydub-based)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_from_content_type(content_type: Optional[str], filename: Optional[str]) -> str:
+        """Resolve a pydub format string from HTTP content type, with filename fallback."""
+        if content_type:
+            ct = content_type.split(";")[0].strip().lower()
+            fmt = _CONTENT_TYPE_TO_FORMAT.get(ct)
+            if fmt:
+                return fmt
+        if filename:
+            ext = os.path.splitext(filename)[1].lower().lstrip(".")
+            if ext == "m4a":
+                return "mp4"
+            if ext in {"mp4", "3gpp", "aac", "mp3", "wav", "webm"}:
+                return ext
+        # Default: assume M4A container (the Android client default)
+        return "mp4"
+
+    def _load_audio_from_bytes(
+        self,
+        file_bytes: bytes,
+        content_type: Optional[str],
+        filename: Optional[str] = None,
+    ) -> "AudioSegment":
+        """
+        Load an audio upload (M4A/3GP/MP3/...) into a pydub AudioSegment.
+
+        Writes the bytes to a short-lived temp file because ffmpeg needs a
+        seekable input. The temp file is always cleaned up.
+        """
+        fmt = self._format_from_content_type(content_type, filename)
+        tmp_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=f".{fmt}", delete=False) as tmp:
+                tmp.write(file_bytes)
+                tmp_path = tmp.name
+            return AudioSegment.from_file(tmp_path, format=fmt)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _detect_noise_floor(audio: "AudioSegment", sample_ms: int = 500) -> float:
+        """
+        Estimate background noise level by measuring dBFS of the first
+        `sample_ms` of audio (assumed to be silence/noise while the user
+        waits for the BP cuff to finish). Returns a dynamic silence
+        threshold = noise_floor + 6 dB, clamped to [-55.0, -25.0] dBFS.
+
+        For absolute silence (dBFS == -inf), returns a very sensitive
+        default of -50.0 dBFS so that any voice will be detected.
+        """
+        sample = audio[:sample_ms]
+        noise_floor_dbfs = sample.dBFS
+        if noise_floor_dbfs == float("-inf"):
+            return -50.0
+        threshold = noise_floor_dbfs + 6.0
+        # Clamp to reasonable speech-detection bounds
+        return max(-55.0, min(-25.0, threshold))
+
+    @staticmethod
+    def _trim_leading_silence(
+        audio: "AudioSegment",
+        silence_threshold_dbfs: float = -40.0,
+        safety_margin_ms: int = 300,
+        min_output_duration_ms: int = 1500,
+    ) -> Tuple["AudioSegment", int]:
+        """
+        Trim leading silence from an AudioSegment.
+
+        Args:
+            audio: full audio segment
+            silence_threshold_dbfs: dBFS level below which audio is silence.
+                More negative = more aggressive (trims more).
+            safety_margin_ms: ms preserved before the detected onset, so the
+                attack of the first word is not cut.
+            min_output_duration_ms: if trimming would yield audio shorter
+                than this, return the original instead.
+
+        Returns:
+            (trimmed_audio, ms_removed). ms_removed == 0 when no trim was applied.
+        """
+        if detect_leading_silence is None:
+            return audio, 0
+
+        start_trim_ms = detect_leading_silence(
+            audio, silence_threshold=silence_threshold_dbfs
+        )
+        start_trim_ms = max(0, start_trim_ms - safety_margin_ms)
+        if start_trim_ms == 0:
+            return audio, 0
+
+        trimmed = audio[start_trim_ms:]
+        if len(trimmed) < min_output_duration_ms:
+            return audio, 0
+
+        return trimmed, start_trim_ms
+
+    @staticmethod
+    def _export_audio_for_whisper(audio: "AudioSegment") -> Tuple[bytes, str]:
+        """
+        Export the (possibly trimmed) AudioSegment to in-memory MP3 bytes.
+
+        MP3 is supported by Whisper, lighter than WAV, and consistently
+        smaller than the original M4A when the user had a long silent
+        prefix that has now been removed.
+
+        Returns:
+            (audio_bytes, filename) where filename carries the .mp3
+            extension so Whisper detects the format from the multipart upload.
+        """
+        buffer = io.BytesIO()
+        audio.export(buffer, format="mp3")
+        buffer.seek(0)
+        return buffer.read(), "audio.mp3"
+
+    async def parse_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> dict:
         """
         Transcribe audio and parse BP values in one step.
-        
+
         Args:
             audio_content: Audio file bytes
             filename: Original filename
-            
+            content_type: Optional HTTP content type, used to pick the
+                pydub decoder before trimming.
+
         Returns:
-            dict with: systolic, diastolic, pulse, device_classification, confidence, transcription
+            dict with: systolic, diastolic, pulse, device_classification,
+            confidence, transcription, audio_original_duration_ms,
+            audio_trimmed_duration_ms, silence_removed_ms
         """
-        # Step 1: Transcribe audio to text
-        transcription = await self.transcribe_audio(audio_content, filename)
-        
+        # Step 1: Transcribe audio to text (with silence trim if available)
+        transcription, audio_metadata = await self.transcribe_audio(
+            audio_content, filename, content_type=content_type
+        )
+
         if not transcription:
             return {
                 "systolic": None,
@@ -231,15 +464,17 @@ class VoiceParsingService:
                 "pulse": None,
                 "device_classification": None,
                 "confidence": "low",
-                "transcription": ""
+                "transcription": "",
+                **audio_metadata,
             }
-        
+
         # Step 2: Parse transcription for BP values
         result = await self.parse_transcription(transcription)
-        
-        # Include transcription in result for display/verification
+
+        # Include transcription + audio metadata in result
         result["transcription"] = transcription
-        
+        result.update(audio_metadata)
+
         return result
 
 

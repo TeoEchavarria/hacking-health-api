@@ -447,6 +447,11 @@ class AudioParseResult(BaseModel):
     device_classification: Optional[str] = None
     confidence: str = "low"  # "high" | "low"
     transcription: str = ""  # The transcribed text for user verification
+    # Optional debugging/observability metadata about server-side audio trimming.
+    # Always >= 0; all zero when trim was skipped or unavailable.
+    audio_original_duration_ms: Optional[int] = None
+    audio_trimmed_duration_ms: Optional[int] = None
+    silence_removed_ms: Optional[int] = None
 
 
 # =========================================

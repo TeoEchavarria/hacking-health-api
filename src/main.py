@@ -30,7 +30,17 @@ async def startup_db_client():
     db.connect()
     database = db.get_db()
     logger = get_logger(__name__)
-    
+
+    # Verify ffmpeg is available (required by pydub for audio trimming in /parse-bp-audio)
+    try:
+        from pydub.utils import which as pydub_which
+        if not pydub_which("ffmpeg"):
+            logger.error("ffmpeg not found in PATH - audio trimming will be disabled")
+        else:
+            logger.info("ffmpeg found - audio trimming enabled")
+    except Exception as e:
+        logger.warning(f"Could not verify ffmpeg availability: {e}")
+
     # Create indexes for pairings collection
     try:
         await database.pairings.create_index("code")

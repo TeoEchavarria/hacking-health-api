@@ -274,7 +274,7 @@
     {
       "id": "valid_boundary_systolic_low",
       "input": {"systolic": 60, "diastolic": 30, "pulse": null, "timestamp": null},
-      "expected": {"is_valid": false, "error": "Systolic must be greater than diastolic"}
+      "expected": {"is_valid": true, "error": null}
     },
     {
       "id": "valid_boundary_systolic_high",

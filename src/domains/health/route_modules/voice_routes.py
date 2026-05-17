@@ -93,11 +93,16 @@ async def parse_bp_audio(
 
         # Parse audio (transcribe + extract BP)
         service = get_voice_parsing_service()
-        result = await service.parse_audio(audio_content, audio.filename or "recording.3gp")
+        result = await service.parse_audio(
+            audio_content,
+            audio.filename or "recording.m4a",
+            content_type=audio.content_type,
+        )
 
         logger.info(
             f"Audio parse result: S={result.get('systolic')} D={result.get('diastolic')} "
-            f"P={result.get('pulse')} conf={result.get('confidence')}"
+            f"P={result.get('pulse')} conf={result.get('confidence')} "
+            f"silence_removed_ms={result.get('silence_removed_ms', 0)}"
         )
 
         # Register voice measurement event for notifications
@@ -125,7 +130,10 @@ async def parse_bp_audio(
             pulse=result.get("pulse"),
             device_classification=result.get("device_classification"),
             confidence=result.get("confidence", "low"),
-            transcription=result.get("transcription", "")
+            transcription=result.get("transcription", ""),
+            audio_original_duration_ms=result.get("audio_original_duration_ms"),
+            audio_trimmed_duration_ms=result.get("audio_trimmed_duration_ms"),
+            silence_removed_ms=result.get("silence_removed_ms"),
         )
 
     except HTTPException:
