@@ -156,11 +156,14 @@ class LocationService:
             loc = current_user["lastLocation"]
             coordinates = loc.get("coordinates", [])
             if len(coordinates) == 2:
+                updated_at_self = loc.get("updatedAt")
+                if updated_at_self and updated_at_self.tzinfo is None:
+                    updated_at_self = updated_at_self.replace(tzinfo=timezone.utc)
                 self_location = {
                     "latitude": coordinates[1],  # GeoJSON: [lng, lat]
                     "longitude": coordinates[0],
                     "accuracy": loc.get("accuracy"),
-                    "updatedAt": int(loc["updatedAt"].timestamp() * 1000) if loc.get("updatedAt") else None
+                    "updatedAt": int(updated_at_self.timestamp() * 1000) if updated_at_self else None
                 }
         
         self_data = {
@@ -243,6 +246,9 @@ class LocationService:
             updated_at = loc.get("updatedAt")
             
             if len(coordinates) == 2 and updated_at:
+                # Normalize naive datetimes from MongoDB to UTC-aware
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
                 partner_location = {
                     "latitude": coordinates[1],  # GeoJSON: [lng, lat]
                     "longitude": coordinates[0],

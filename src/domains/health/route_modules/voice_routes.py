@@ -55,7 +55,7 @@ async def parse_bp_voice(
 
     except Exception as e:
         logger.error(f"Error parsing BP voice: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="No se pudo procesar la transcripción. Intenta de nuevo.")
 
 
 @router.post("/parse-bp-audio", response_model=AudioParseResult)
@@ -140,4 +140,4 @@ async def parse_bp_audio(
         raise
     except Exception as e:
         logger.error(f"Error parsing BP audio: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="No se pudo procesar el audio. Intenta de nuevo.")

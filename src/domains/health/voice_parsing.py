@@ -298,10 +298,11 @@ class VoiceParsingService:
                 send_bytes = audio_content
                 send_filename = filename
 
-        # Whisper API accepts file tuples
+        # Whisper API accepts file tuples; wrap bytes in BytesIO so the
+        # OpenAI SDK can stream them with a proper content-length header.
         response = await self.client.audio.transcriptions.create(
             model="whisper-1",
-            file=(send_filename, send_bytes),
+            file=(send_filename, io.BytesIO(send_bytes)),
             language="es",  # Spanish
             response_format="text"
         )
