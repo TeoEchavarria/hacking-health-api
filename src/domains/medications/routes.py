@@ -78,11 +78,12 @@ async def create_medication(
     """
     try:
         service = MedicationService(db)
+        times = medication.times or ([medication.time] if medication.time else [])
         result = await service.create_medication(
             user_id=user_id,
             name=medication.name,
             dosage=medication.dosage,
-            time=medication.time,
+            times=times,
             instructions=medication.instructions,
             medication_type=medication.medication_type.value
         )
@@ -119,7 +120,7 @@ async def create_medication_for_patient(
             user_id=patient_id,  # El medicamento pertenece al paciente
             name=medication.name,
             dosage=medication.dosage,
-            time=medication.time,
+            times=medication.times or ([medication.time] if medication.time else []),
             instructions=medication.instructions,
             medication_type=medication.medication_type.value
         )
@@ -175,7 +176,9 @@ async def update_medication(
             updates["name"] = medication.name
         if medication.dosage is not None:
             updates["dosage"] = medication.dosage
-        if medication.time is not None:
+        if medication.times is not None:
+            updates["times"] = medication.times
+        elif medication.time is not None:
             updates["time"] = medication.time
         if medication.instructions is not None:
             updates["instructions"] = medication.instructions

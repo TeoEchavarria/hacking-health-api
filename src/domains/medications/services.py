@@ -69,26 +69,29 @@ class MedicationService:
         user_id: str,
         name: str,
         dosage: str,
-        time: str,
+        times: List[str],
         instructions: str,
         medication_type: str
     ) -> dict:
         """Crear un nuevo medicamento"""
         medication_id = str(uuid4())
-        
+
         document = MedicationDB.create_document(
             medication_id=medication_id,
             user_id=user_id,
             name=name,
             dosage=dosage,
-            time=time,
+            times=times,
             instructions=instructions,
             medication_type=medication_type
         )
-        
+
         await self.medications.insert_one(document)
-        logger.info(f"Created medication {medication_id} for user {user_id}")
-        
+        logger.info(
+            f"Created medication {medication_id} for user {user_id} "
+            f"with {len(times)} reminder time(s)"
+        )
+
         return MedicationDB.to_response(document)
     
     async def get_medications(self, user_id: str, include_inactive: bool = False) -> List[dict]:
@@ -96,7 +99,9 @@ class MedicationService:
         query = {"userId": user_id}
         if not include_inactive:
             query["isActive"] = True
-        
+
+        # Sort by the legacy `time` field. New `times` documents have it set
+        # to the first scheduled time, so the order remains sensible.
         cursor = self.medications.find(query).sort("time", 1)
         medications = []
         
@@ -125,13 +130,20 @@ class MedicationService:
         """Actualizar un medicamento"""
         # Build update document
         update_doc = {"$set": {"updatedAt": datetime.utcnow()}}
-        
+
         if "name" in updates and updates["name"]:
             update_doc["$set"]["name"] = updates["name"]
         if "dosage" in updates:
             update_doc["$set"]["dosage"] = updates["dosage"]
-        if "time" in updates:
+        # Handle times (list) and legacy time (single). When `times` is given
+        # it wins; otherwise a legacy `time` payload updates the first slot.
+        if "times" in updates and updates["times"] is not None:
+            new_times = list(updates["times"])
+            update_doc["$set"]["times"] = new_times
+            update_doc["$set"]["time"] = new_times[0] if new_times else ""
+        elif "time" in updates and updates["time"] is not None:
             update_doc["$set"]["time"] = updates["time"]
+            update_doc["$set"]["times"] = [updates["time"]]
         if "instructions" in updates:
             update_doc["$set"]["instructions"] = updates["instructions"]
         if "medication_type" in updates:
@@ -245,13 +257,13 @@ class MedicationService:
         grace_minutes: int = 30,
     ) -> None:
         """
-        Look at today's medications for the patient and, for each one whose
-        scheduled time + grace period has passed without any take recorded,
-        register a MEDICATION_MISSED biometric event so the caregiver gets a
-        single push per (medication, day).
+        Look at today's medications for the patient and, for each scheduled
+        time whose moment + grace period has passed without enough takes
+        recorded, register a MEDICATION_MISSED biometric event so the
+        caregiver gets a single push per (medication, scheduled-time, day).
 
-        Dedup is enforced via a flag on the medication document
-        (`lastMissedAlertDate`) so callers can invoke this method on every
+        Dedup is enforced via a per-time map on the medication document
+        (`missedAlertsByTime`) so callers can invoke this method on every
         list refresh without spamming.
         """
         from src.domains.events.services import BiometricEventService
@@ -265,22 +277,14 @@ class MedicationService:
         event_service = BiometricEventService(self.db)
 
         for item in medications_with_takes:
-            if item.get("isTakenToday"):
-                continue
             med = item.get("medication") or {}
-            scheduled = med.get("time")
-            if not scheduled or ":" not in scheduled:
-                continue
-            try:
-                hh, mm = scheduled.split(":")
-                scheduled_dt = now.replace(
-                    hour=int(hh), minute=int(mm), second=0, microsecond=0
-                )
-            except Exception:
-                continue
-
-            overdue_minutes = (now - scheduled_dt).total_seconds() / 60
-            if overdue_minutes < grace_minutes:
+            takes = item.get("takes") or []
+            takes_count = len(takes)
+            scheduled_times = med.get("times") or (
+                [med.get("time")] if med.get("time") else []
+            )
+            scheduled_times = [t for t in scheduled_times if t and ":" in t]
+            if not scheduled_times:
                 continue
 
             med_id = med.get("id") or med.get("_id")
@@ -290,26 +294,49 @@ class MedicationService:
             doc = await self.medications.find_one({"_id": med_id})
             if not doc:
                 continue
-            if doc.get("lastMissedAlertDate") == today_str:
-                continue
+            missed_map = doc.get("missedAlertsByTime") or {}
 
-            try:
-                await event_service.register_biometric_event(
-                    patient_id=patient_id,
-                    event_type=BiometricEventType.MEDICATION_MISSED.value,
-                    payload={
-                        "medication_id": med_id,
-                        "medication_name": doc.get("name", ""),
-                        "dosage": doc.get("dosage", ""),
-                        "scheduled_time": scheduled,
-                    },
-                )
-                await self.medications.update_one(
-                    {"_id": med_id},
-                    {"$set": {"lastMissedAlertDate": today_str}},
-                )
-            except Exception as e:
-                logger.warning(f"Failed to register missed-dose event for {med_id}: {e}")
+            for idx, scheduled in enumerate(sorted(scheduled_times)):
+                # If patient already has enough takes for the doses so far,
+                # skip this slot.
+                if takes_count > idx:
+                    continue
+                try:
+                    hh, mm = scheduled.split(":")
+                    scheduled_dt = now.replace(
+                        hour=int(hh), minute=int(mm), second=0, microsecond=0
+                    )
+                except Exception:
+                    continue
+
+                overdue_minutes = (now - scheduled_dt).total_seconds() / 60
+                if overdue_minutes < grace_minutes:
+                    continue
+
+                slot_key = f"{today_str}:{scheduled}"
+                if missed_map.get(slot_key):
+                    continue
+
+                try:
+                    await event_service.register_biometric_event(
+                        patient_id=patient_id,
+                        event_type=BiometricEventType.MEDICATION_MISSED.value,
+                        payload={
+                            "medication_id": med_id,
+                            "medication_name": doc.get("name", ""),
+                            "dosage": doc.get("dosage", ""),
+                            "scheduled_time": scheduled,
+                        },
+                    )
+                    await self.medications.update_one(
+                        {"_id": med_id},
+                        {"$set": {f"missedAlertsByTime.{slot_key}": True}},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to register missed-dose event for {med_id} "
+                        f"at {scheduled}: {e}"
+                    )
     
     async def get_medications_with_today_status(
         self,
@@ -335,12 +362,15 @@ class MedicationService:
         result = []
         for med in medications:
             med_takes = takes_by_medication.get(med["id"], [])
+            # `isTakenToday` means every scheduled dose has at least one take.
+            # For meds with multiple times per day this requires N takes.
+            scheduled_count = max(len(med.get("times") or []), 1)
             result.append({
                 "medication": med,
                 "takes": med_takes,
-                "isTakenToday": len(med_takes) > 0
+                "isTakenToday": len(med_takes) >= scheduled_count
             })
-        
+
         return result
     
     async def get_monthly_report(
