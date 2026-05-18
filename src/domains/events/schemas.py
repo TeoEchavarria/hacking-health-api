@@ -15,6 +15,8 @@ class BiometricEventType(str, Enum):
     SLEEP_SUMMARY = "sleep_summary"
     WATCH_MEASUREMENT = "watch_measurement"
     MANUAL_ALERT = "manual_alert"
+    MEDICATION_TAKEN = "medication_taken"
+    MEDICATION_MISSED = "medication_missed"
 
 
 class EventSeverity(str, Enum):

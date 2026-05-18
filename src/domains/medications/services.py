@@ -237,6 +237,79 @@ class MedicationService:
             takes.append(MedicationTakeDB.to_response(doc))
         
         return takes
+
+    async def check_and_notify_missed_doses(
+        self,
+        patient_id: str,
+        medications_with_takes: List[dict],
+        grace_minutes: int = 30,
+    ) -> None:
+        """
+        Look at today's medications for the patient and, for each one whose
+        scheduled time + grace period has passed without any take recorded,
+        register a MEDICATION_MISSED biometric event so the caregiver gets a
+        single push per (medication, day).
+
+        Dedup is enforced via a flag on the medication document
+        (`lastMissedAlertDate`) so callers can invoke this method on every
+        list refresh without spamming.
+        """
+        from src.domains.events.services import BiometricEventService
+        from src.domains.events.schemas import BiometricEventType
+
+        if not medications_with_takes:
+            return
+
+        now = datetime.utcnow()
+        today_str = now.strftime("%Y-%m-%d")
+        event_service = BiometricEventService(self.db)
+
+        for item in medications_with_takes:
+            if item.get("isTakenToday"):
+                continue
+            med = item.get("medication") or {}
+            scheduled = med.get("time")
+            if not scheduled or ":" not in scheduled:
+                continue
+            try:
+                hh, mm = scheduled.split(":")
+                scheduled_dt = now.replace(
+                    hour=int(hh), minute=int(mm), second=0, microsecond=0
+                )
+            except Exception:
+                continue
+
+            overdue_minutes = (now - scheduled_dt).total_seconds() / 60
+            if overdue_minutes < grace_minutes:
+                continue
+
+            med_id = med.get("id") or med.get("_id")
+            if not med_id:
+                continue
+
+            doc = await self.medications.find_one({"_id": med_id})
+            if not doc:
+                continue
+            if doc.get("lastMissedAlertDate") == today_str:
+                continue
+
+            try:
+                await event_service.register_biometric_event(
+                    patient_id=patient_id,
+                    event_type=BiometricEventType.MEDICATION_MISSED.value,
+                    payload={
+                        "medication_id": med_id,
+                        "medication_name": doc.get("name", ""),
+                        "dosage": doc.get("dosage", ""),
+                        "scheduled_time": scheduled,
+                    },
+                )
+                await self.medications.update_one(
+                    {"_id": med_id},
+                    {"$set": {"lastMissedAlertDate": today_str}},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to register missed-dose event for {med_id}: {e}")
     
     async def get_medications_with_today_status(
         self,

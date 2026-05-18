@@ -261,6 +261,25 @@ async def take_medication(
         
         if not result:
             raise HTTPException(status_code=404, detail="Medicamento no encontrado")
+
+        # Notify caregiver: "$patient tomó $med"
+        try:
+            from src.domains.events.services import BiometricEventService
+            from src.domains.events.schemas import BiometricEventType
+            event_service = BiometricEventService(db)
+            await event_service.register_biometric_event(
+                patient_id=user_id,
+                event_type=BiometricEventType.MEDICATION_TAKEN.value,
+                payload={
+                    "medication_id": take.medication_id,
+                    "medication_name": medication.get("name", ""),
+                    "dosage": medication.get("dosage", ""),
+                    "scheduled_time": medication.get("time", ""),
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to register medication-taken event: {e}")
+
         return result
     except HTTPException:
         raise
@@ -339,6 +358,15 @@ async def get_today_status(
             user_id=target_user_id,
             target_date=date
         )
+
+        # Trigger missed-dose notifications for the patient's caregiver.
+        # Runs on every fetch (patient or caregiver) so a single missed alert
+        # per (medication, day) is sent reliably without a separate scheduler.
+        try:
+            await service.check_and_notify_missed_doses(target_user_id, result)
+        except Exception as e:
+            logger.warning(f"Failed missed-dose check: {e}")
+
         return result
     except HTTPException:
         raise

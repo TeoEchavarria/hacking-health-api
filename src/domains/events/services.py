@@ -75,7 +75,19 @@ def build_event_message(event_type: str, payload: Dict[str, Any]) -> str:
     
     elif event_type == BiometricEventType.MANUAL_ALERT.value:
         return payload.get("message", "Alerta manual")
-    
+
+    elif event_type == BiometricEventType.MEDICATION_TAKEN.value:
+        med_name = payload.get("medication_name", "un medicamento")
+        dosage = payload.get("dosage", "").strip()
+        suffix = f" ({dosage})" if dosage else ""
+        return f"Tomó {med_name}{suffix}"
+
+    elif event_type == BiometricEventType.MEDICATION_MISSED.value:
+        med_name = payload.get("medication_name", "un medicamento")
+        scheduled = payload.get("scheduled_time", "")
+        suffix = f" (programado a las {scheduled})" if scheduled else ""
+        return f"Aún no se ha tomado {med_name}{suffix}"
+
     return "Evento registrado"
 
 
@@ -132,7 +144,13 @@ def resolve_severity(event_type: str, payload: Dict[str, Any]) -> str:
         severity = payload.get("severity")
         if severity in [s.value for s in EventSeverity]:
             return severity
-    
+
+    elif event_type == BiometricEventType.MEDICATION_TAKEN.value:
+        return EventSeverity.INFO.value
+
+    elif event_type == BiometricEventType.MEDICATION_MISSED.value:
+        return EventSeverity.WARNING.value
+
     return EventSeverity.INFO.value
 
 
