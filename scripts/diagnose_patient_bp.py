@@ -67,10 +67,10 @@ async def diagnose(email: str, only_today: bool) -> None:
     # Biometric events: useful to see how many push notifications fired
     ev_query: dict = {
         "patientId": user_id,
-        "eventType": {"$in": ["voice_measurement", "watch_measurement"]},
+        "type": {"$in": ["voice_measurement", "watch_measurement"]},
     }
     if only_today:
-        start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         ev_query["recordedAt"] = {"$gte": start_of_day}
 
     ev_cursor = db.biometric_events.find(ev_query).sort("recordedAt", -1)
@@ -83,13 +83,13 @@ async def diagnose(email: str, only_today: bool) -> None:
         sys = payload.get("systolic")
         dia = payload.get("diastolic")
         print(
-            f"  • {d.get('recordedAt')}  type={d.get('eventType')!r:>22}  "
+            f"  • {d.get('recordedAt')}  type={d.get('type')!r:>22}  "
             f"sys/dia={sys}/{dia}  severity={d.get('severity')!r}  "
             f"msg={d.get('message')!r}"
         )
 
     print("\n=== Mismatch analysis ===")
-    voice_events = [e for e in ev_docs if e.get("eventType") == "voice_measurement"]
+    voice_events = [e for e in ev_docs if e.get("type") == "voice_measurement"]
     voice_with_values = [e for e in voice_events if e.get("payload", {}).get("systolic")]
     voice_readings = [
         d for d in bp_docs
