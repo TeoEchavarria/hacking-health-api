@@ -1,6 +1,7 @@
 """
 Business logic for biometric events domain.
 """
+import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from bson import ObjectId
@@ -17,6 +18,10 @@ COLLECTION_NAME = BiometricEventDB.COLLECTION_NAME
 # Keywords that trigger warning severity in voice measurements
 WARNING_KEYWORDS = ["dolor", "mareo", "caída", "ayuda", "mal", "desmayo", "sangre", "emergencia"]
 
+# Strong references to in-flight background push tasks so the event loop does
+# not GC them before they complete.
+_BACKGROUND_PUSH_TASKS: "set[asyncio.Task]" = set()
+
 
 def build_event_message(event_type: str, payload: Dict[str, Any]) -> str:
     """
@@ -30,6 +35,26 @@ def build_event_message(event_type: str, payload: Dict[str, Any]) -> str:
         Human-readable message for UI display
     """
     if event_type == BiometricEventType.VOICE_MEASUREMENT.value:
+        systolic = payload.get("systolic")
+        diastolic = payload.get("diastolic")
+        stage = payload.get("stage", "")
+
+        # If BP values were extracted, prefer a structured message identical
+        # in shape to WATCH_MEASUREMENT so caregivers see the reading instantly.
+        if systolic and diastolic:
+            status_map = {
+                "normal": "Normal ✓",
+                "elevated": "Elevada ⚠️",
+                "stage_1": "Hipertensión Etapa 1 ⚠️",
+                "stage_2": "Hipertensión Etapa 2 🔴",
+                "hypertensive_crisis": "¡Crisis Hipertensiva! 🚨",
+            }
+            status = status_map.get(stage, "")
+            prefix = "Medición por voz"
+            if status:
+                return f"{prefix}: {systolic}/{diastolic} mmHg - {status}"
+            return f"{prefix}: {systolic}/{diastolic} mmHg"
+
         transcription = payload.get("transcription", "")
         # Truncate if too long
         if len(transcription) > 50:
@@ -125,6 +150,20 @@ def resolve_severity(event_type: str, payload: Dict[str, Any]) -> str:
                 return EventSeverity.WARNING.value
     
     elif event_type == BiometricEventType.VOICE_MEASUREMENT.value:
+        # Escalate based on parsed BP classification when available so
+        # caregivers receive an instant high-priority push for crises.
+        stage = payload.get("stage")
+        if stage == "hypertensive_crisis":
+            return EventSeverity.CRITICAL.value
+        if stage in ("stage_2", "stage_1"):
+            return EventSeverity.WARNING.value
+
+        # Honor the classifier's own severity if it was attached
+        classification_severity = payload.get("classification_severity")
+        if classification_severity in [s.value for s in EventSeverity]:
+            if classification_severity != EventSeverity.INFO.value:
+                return classification_severity
+
         transcription = payload.get("transcription", "").lower()
         # Check for warning keywords
         for keyword in WARNING_KEYWORDS:
@@ -243,34 +282,42 @@ class BiometricEventService:
             f"patient={patient_id}, caregiver={caregiver_id}"
         )
         
-        # 5. Send push notification to caregiver (fire-and-forget)
+        # 5. Send push notification to caregiver (fire-and-forget, runs concurrently
+        #    so the HTTP response returns immediately and the caregiver gets the
+        #    push without waiting for any other downstream awaits to complete).
         if caregiver_id and caregiver_fcm_token:
-            try:
-                # Título según severidad
-                title_map = {
-                    "critical": "🚨 ALERTA CRÍTICA",
-                    "warning": "⚠️ Advertencia de salud",
-                    "info": "📊 Nueva medición registrada"
-                }
-                push_title = title_map.get(severity, "Nueva alerta de tu persona cuidada")
-                push_body = f"{patient_name}: {message}" if patient_name else message
-                
-                logger.info(f"[PUSH] Sending to caregiver {caregiver_id}: title='{push_title}', body='{push_body[:50]}...'")
-                
-                result = await send_health_alert_push(
-                    fcm_tokens=[caregiver_fcm_token],
-                    alert_type=event_type,
-                    title=push_title,
-                    body=push_body,
-                    patient_id=patient_id,
-                    patient_name=patient_name,
-                    severity=severity,
-                    is_caregiver_notification=True
-                )
-                logger.info(f"[PUSH] Result: {result}")
-            except Exception as e:
-                # Don't fail event creation if push fails
-                logger.error(f"[PUSH] Failed to send notification: {e}", exc_info=True)
+            # Título según severidad
+            title_map = {
+                "critical": "🚨 ALERTA CRÍTICA",
+                "warning": "⚠️ Advertencia de salud",
+                "info": "📊 Nueva medición registrada"
+            }
+            push_title = title_map.get(severity, "Nueva alerta de tu persona cuidada")
+            push_body = f"{patient_name}: {message}" if patient_name else message
+
+            logger.info(f"[PUSH] Dispatching to caregiver {caregiver_id}: title='{push_title}', body='{push_body[:50]}...'")
+
+            async def _send_push():
+                try:
+                    push_result = await send_health_alert_push(
+                        fcm_tokens=[caregiver_fcm_token],
+                        alert_type=event_type,
+                        title=push_title,
+                        body=push_body,
+                        patient_id=patient_id,
+                        patient_name=patient_name,
+                        severity=severity,
+                        is_caregiver_notification=True,
+                    )
+                    logger.info(f"[PUSH] Result: {push_result}")
+                except Exception as e:
+                    logger.error(f"[PUSH] Failed to send notification: {e}", exc_info=True)
+
+            # Fire-and-forget so the caller (and HTTP response) is not blocked.
+            push_task = asyncio.create_task(_send_push())
+            # Keep a reference to prevent premature garbage collection.
+            _BACKGROUND_PUSH_TASKS.add(push_task)
+            push_task.add_done_callback(_BACKGROUND_PUSH_TASKS.discard)
         else:
             logger.info(f"[PUSH] Skipping push: caregiver_id={caregiver_id}, has_token={bool(caregiver_fcm_token)}")
         

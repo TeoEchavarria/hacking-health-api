@@ -108,18 +108,35 @@ async def parse_bp_audio(
         # Register voice measurement event for notifications
         try:
             from src.core.database import db as db_instance
+            from src.domains.health.classification import classify_blood_pressure
             database = db_instance.get_db()
             event_service = BiometricEventService(database)
+
+            voice_payload = {
+                "transcription": result.get("transcription", ""),
+                "systolic": result.get("systolic"),
+                "diastolic": result.get("diastolic"),
+                "pulse": result.get("pulse"),
+                "confidence": result.get("confidence", "low"),
+            }
+
+            # Classify BP if both values were parsed so caregivers receive
+            # an accurate severity (warning/critical) instantly.
+            try:
+                sys_v = result.get("systolic")
+                dia_v = result.get("diastolic")
+                if sys_v is not None and dia_v is not None:
+                    classification = classify_blood_pressure(int(sys_v), int(dia_v))
+                    voice_payload["stage"] = classification.get("stage")
+                    voice_payload["classification_severity"] = classification.get("severity")
+                    voice_payload["classification_label"] = classification.get("label")
+            except Exception as ce:
+                logger.warning(f"Could not classify voice BP reading: {ce}")
+
             await event_service.register_biometric_event(
                 patient_id=user_id,
                 event_type=BiometricEventType.VOICE_MEASUREMENT.value,
-                payload={
-                    "transcription": result.get("transcription", ""),
-                    "systolic": result.get("systolic"),
-                    "diastolic": result.get("diastolic"),
-                    "pulse": result.get("pulse"),
-                    "confidence": result.get("confidence", "low")
-                }
+                payload=voice_payload,
             )
         except Exception as e:
             logger.warning(f"Failed to register voice measurement event: {e}")
