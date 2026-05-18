@@ -140,11 +140,11 @@ class BloodPressureService:
     ) -> Dict[str, Any]:
         """
         Get blood pressure history for a patient.
-        
+
         Args:
             patient_id: ID of the patient
             days: Number of days of history to retrieve
-            
+
         Returns:
             Dict with patient_id, patient_name, days_requested, data_points, count
         """
@@ -215,7 +215,57 @@ class BloodPressureService:
             "data_points": data_points,
             "count": len([dp for dp in data_points if dp["avg_systolic"] is not None])
         }
-    
+
+    async def get_patient_blood_pressure_readings(
+        self,
+        patient_id: str,
+        days: int = 30,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """
+        Get the raw (individual) blood pressure readings for a patient.
+
+        Used by the caregiver-facing history view to mirror the patient's
+        local list. Returns readings sorted by timestamp descending.
+        """
+        user = await self.db.users.find_one({"_id": ObjectId(patient_id)})
+        patient_name = user.get("name", "Usuario") if user else "Usuario"
+
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=days - 1)
+        start_date_str = start_date.isoformat()
+
+        cursor = (
+            self.db.blood_pressure_readings
+            .find({"userId": patient_id, "date": {"$gte": start_date_str}})
+            .sort("timestamp", -1)
+            .limit(limit)
+        )
+        docs = await cursor.to_list(length=limit)
+
+        readings: List[Dict[str, Any]] = []
+        for d in docs:
+            readings.append({
+                "id": str(d.get("_id")),
+                "systolic": d.get("systolic"),
+                "diastolic": d.get("diastolic"),
+                "pulse": d.get("pulse"),
+                "timestamp": d.get("timestamp"),
+                "date": d.get("date"),
+                "source": d.get("source"),
+                "stage": d.get("stage"),
+                "severity": d.get("severity"),
+                "crisis_flag": bool(d.get("crisis_flag", False)),
+            })
+
+        return {
+            "patient_id": patient_id,
+            "patient_name": patient_name,
+            "days_requested": days,
+            "readings": readings,
+            "count": len(readings),
+        }
+
     async def get_patient_heart_rate_history(
         self,
         patient_id: str,

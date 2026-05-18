@@ -13,7 +13,8 @@ from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from src.domains.health.schemas import (
     BloodPressureSubmission, BloodPressureResponse,
     BloodPressureBatchInput, BloodPressureBatchResponse,
-    BloodPressureHistoryResponse
+    BloodPressureHistoryResponse,
+    BloodPressureReadingsResponse,
 )
 from src.domains.health.services import HealthService
 from src.domains.health.classification import classify_blood_pressure
@@ -258,4 +259,48 @@ async def get_patient_blood_pressure_history(
         raise
     except Exception as e:
         logger.error(f"Error fetching blood pressure history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/patient/{patient_id}/blood-pressure-readings",
+    response_model=BloodPressureReadingsResponse,
+)
+async def get_patient_blood_pressure_readings(
+    patient_id: str,
+    days: int = Query(30, ge=1, le=180, description="Days of history (1-180)"),
+    limit: int = Query(500, ge=1, le=2000),
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database),
+):
+    """
+    Get the patient's raw blood-pressure readings (caregiver-facing).
+
+    Mirrors what the patient sees on their device. Authorization is the
+    same as for the aggregated history endpoint: own data or active
+    caregiver pairing.
+    """
+    try:
+        service = HealthService(db)
+
+        has_access = await service.verify_patient_access(
+            requester_id=user_id,
+            patient_id=patient_id,
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=403,
+                detail="No tienes permiso para ver el historial de este paciente",
+            )
+
+        return await service.get_patient_blood_pressure_readings(
+            patient_id=patient_id,
+            days=days,
+            limit=limit,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching BP readings: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

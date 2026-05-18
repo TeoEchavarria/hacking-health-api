@@ -421,6 +421,33 @@ class BloodPressureHistoryResponse(BaseModel):
     count: int
 
 
+class BloodPressureReadingItem(BaseModel):
+    """A single raw BP reading exposed to caregivers."""
+    id: str
+    systolic: int
+    diastolic: int
+    pulse: Optional[int] = None
+    timestamp: str
+    date: Optional[str] = None
+    source: Optional[str] = None
+    stage: Optional[str] = None
+    severity: Optional[str] = None
+    crisis_flag: bool = False
+
+
+class BloodPressureReadingsResponse(BaseModel):
+    """Response for GET /health/patient/{patient_id}/blood-pressure-readings.
+
+    Returns individual readings (not daily aggregates) so the caregiver
+    can mirror the same list the patient sees on their device.
+    """
+    patient_id: str
+    patient_name: Optional[str] = None
+    days_requested: int
+    readings: List[BloodPressureReadingItem]
+    count: int
+
+
 # =========================================
 # Voice BP Parsing Models
 # =========================================

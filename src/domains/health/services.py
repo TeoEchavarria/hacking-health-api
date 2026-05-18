@@ -170,6 +170,17 @@ class HealthService:
     ) -> Dict[str, Any]:
         """Get blood pressure history for a patient."""
         return await self._blood_pressure.get_patient_blood_pressure_history(patient_id, days)
+
+    async def get_patient_blood_pressure_readings(
+        self,
+        patient_id: str,
+        days: int = 30,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """Get raw individual BP readings for a patient (caregiver view)."""
+        return await self._blood_pressure.get_patient_blood_pressure_readings(
+            patient_id, days, limit
+        )
     
     async def get_patient_heart_rate_history(
         self,
