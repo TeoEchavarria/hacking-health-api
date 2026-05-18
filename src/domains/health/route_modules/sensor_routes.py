@@ -246,21 +246,7 @@ async def upload_health_metrics(
         try:
             event_service = BiometricEventService(db)
 
-            # Steps summary event
-            if metrics.steps is not None:
-                await event_service.register_biometric_event(
-                    patient_id=user_id,
-                    event_type=BiometricEventType.STEPS_SUMMARY.value,
-                    payload={"steps": metrics.steps, "date": metrics.date}
-                )
-
-            # Sleep summary event
-            if metrics.sleep_minutes is not None:
-                await event_service.register_biometric_event(
-                    patient_id=user_id,
-                    event_type=BiometricEventType.SLEEP_SUMMARY.value,
-                    payload={"sleep_minutes": metrics.sleep_minutes, "date": metrics.date}
-                )
+            # Steps and sleep are routine data shown in Calendar screen — no notification event needed.
 
             # Heart rate alert (if out of normal range)
             if metrics.avg_heart_rate is not None:
