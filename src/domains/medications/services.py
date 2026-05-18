@@ -184,53 +184,72 @@ class MedicationService:
         medication_id: str,
         user_id: str,
         taken_at: Optional[datetime] = None,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        scheduled_time: Optional[str] = None,
     ) -> Optional[dict]:
-        """Registrar la toma de un medicamento"""
+        """Registrar la toma de un medicamento
+
+        ``scheduled_time`` ("HH:MM") allows the caller to mark one specific
+        scheduled slot as fulfilled. Without it, the take counts toward the
+        first unfulfilled slot of the day (legacy behaviour).
+        """
         # Verify medication exists and belongs to user
         medication = await self.medications.find_one({
             "_id": medication_id,
             "userId": user_id
         })
-        
+
         if not medication:
             return None
-        
+
         take_id = str(uuid4())
         actual_taken_at = taken_at or datetime.utcnow()
         date_str = actual_taken_at.strftime("%Y-%m-%d")
-        
+
         document = MedicationTakeDB.create_document(
             take_id=take_id,
             medication_id=medication_id,
             user_id=user_id,
             taken_at=actual_taken_at,
             date=date_str,
-            notes=notes
+            notes=notes,
+            scheduled_time=scheduled_time,
         )
-        
+
         await self.medication_takes.insert_one(document)
-        logger.info(f"Recorded take {take_id} for medication {medication_id}")
-        
+        logger.info(
+            f"Recorded take {take_id} for medication {medication_id}"
+            + (f" (slot {scheduled_time})" if scheduled_time else "")
+        )
+
         return MedicationTakeDB.to_response(document)
     
     async def untake_medication(
         self,
         medication_id: str,
         user_id: str,
-        date_str: str
+        date_str: str,
+        scheduled_time: Optional[str] = None,
     ) -> bool:
-        """Desmarcar la toma de un medicamento de un día específico"""
-        # Delete the most recent take for this medication on this date
+        """Desmarcar la toma de un medicamento de un día específico.
+
+        If ``scheduled_time`` is provided we delete the take registered for
+        that exact slot. Otherwise we delete the most recent take of the day
+        (legacy behaviour).
+        """
+        query: dict = {
+            "medicationId": medication_id,
+            "userId": user_id,
+            "date": date_str,
+        }
+        if scheduled_time:
+            query["scheduledTime"] = scheduled_time
+
         result = await self.medication_takes.find_one_and_delete(
-            {
-                "medicationId": medication_id,
-                "userId": user_id,
-                "date": date_str
-            },
-            sort=[("takenAt", -1)]  # Delete the most recent one
+            query,
+            sort=[("takenAt", -1)],  # Delete the most recent matching one
         )
-        
+
         return result is not None
     
     async def get_takes_for_date(

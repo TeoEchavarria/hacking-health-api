@@ -78,7 +78,8 @@ class MedicationTakeDB:
         user_id: str,
         taken_at: datetime,
         date: str,  # YYYY-MM-DD for easy querying
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        scheduled_time: Optional[str] = None,  # "HH:MM" — slot this take fulfills
     ) -> dict:
         """Crea un documento de toma de medicamento para MongoDB"""
         return {
@@ -87,10 +88,11 @@ class MedicationTakeDB:
             "userId": user_id,
             "takenAt": taken_at,
             "date": date,
+            "scheduledTime": scheduled_time,
             "notes": notes,
             "createdAt": datetime.utcnow()
         }
-    
+
     @staticmethod
     def to_response(doc: dict) -> dict:
         """Convierte documento MongoDB a formato de respuesta"""
@@ -100,6 +102,7 @@ class MedicationTakeDB:
             "userId": doc["userId"],
             "takenAt": doc["takenAt"],
             "date": doc["date"],
+            "scheduledTime": doc.get("scheduledTime"),
             "notes": doc.get("notes"),
             "createdAt": doc.get("createdAt")
         }

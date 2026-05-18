@@ -259,7 +259,8 @@ async def take_medication(
             medication_id=take.medication_id,
             user_id=user_id,
             taken_at=take.taken_at,
-            notes=take.notes
+            notes=take.notes,
+            scheduled_time=take.scheduled_time,
         )
         
         if not result:
@@ -277,7 +278,7 @@ async def take_medication(
                     "medication_id": take.medication_id,
                     "medication_name": medication.get("name", ""),
                     "dosage": medication.get("dosage", ""),
-                    "scheduled_time": medication.get("time", ""),
+                    "scheduled_time": take.scheduled_time or medication.get("time", ""),
                 }
             )
         except Exception as e:
@@ -295,6 +296,11 @@ async def take_medication(
 async def untake_medication(
     medication_id: str,
     date: str = Query(..., description="Fecha de la toma a eliminar (YYYY-MM-DD)"),
+    scheduled_time: Optional[str] = Query(
+        None,
+        alias="scheduledTime",
+        description="Horario programado de la toma a eliminar (HH:MM). Si se omite, elimina la toma más reciente del día.",
+    ),
     user_id: str = Depends(verify_token),
     db=Depends(get_database)
 ):
@@ -319,7 +325,8 @@ async def untake_medication(
         result = await service.untake_medication(
             medication_id=medication_id,
             user_id=user_id,
-            date_str=date
+            date_str=date,
+            scheduled_time=scheduled_time,
         )
         
         if not result:

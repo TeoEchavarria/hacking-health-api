@@ -123,7 +123,12 @@ class TakeMedication(BaseModel):
     medication_id: str = Field(..., alias="medicationId")
     notes: Optional[str] = Field(None, description="Notas adicionales sobre la toma")
     taken_at: Optional[datetime] = Field(None, alias="takenAt", description="Fecha/hora de la toma. Si no se especifica, usa el momento actual")
-    
+    scheduled_time: Optional[str] = Field(
+        None,
+        alias="scheduledTime",
+        description="Horario programado al que corresponde esta toma (HH:MM). Permite registrar de forma independiente cada slot del día."
+    )
+
     class Config:
         populate_by_name = True
 
@@ -135,6 +140,7 @@ class MedicationTakeResponse(BaseModel):
     userId: str
     takenAt: datetime
     date: str
+    scheduledTime: Optional[str] = None
     notes: Optional[str] = None
     createdAt: Optional[datetime] = None
 
