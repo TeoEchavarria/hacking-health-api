@@ -17,6 +17,8 @@ class BiometricEventType(str, Enum):
     MANUAL_ALERT = "manual_alert"
     MEDICATION_TAKEN = "medication_taken"
     MEDICATION_MISSED = "medication_missed"
+    MEDICATION_TAKEN_BATCH = "medication_taken_batch"
+    MEDICATION_MISSED_BATCH = "medication_missed_batch"
 
 
 class EventSeverity(str, Enum):

@@ -11,6 +11,8 @@ from src.domains.medications.schemas import (
     MedicationUpdate,
     MedicationResponse,
     TakeMedication,
+    TakeMedicationBatch,
+    TakeMedicationBatchResponse,
     MedicationTakeResponse,
     MedicationWithTakes,
     MonthlyReportResponse,
@@ -289,6 +291,90 @@ async def take_medication(
         raise
     except Exception as e:
         logger.error(f"Error recording medication take: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/take-batch", response_model=TakeMedicationBatchResponse)
+async def take_medication_batch(
+    batch: TakeMedicationBatch,
+    user_id: str = Depends(verify_token),
+    db=Depends(get_database)
+):
+    """
+    Registra la toma de varios medicamentos en una sola operación.
+    Pensado para la confirmación de una alarma agrupada por slot horario:
+    el paciente toca "Ya los tomé" una vez y todas las pastillas de ese
+    horario se marcan como tomadas. Dispara un único evento batched al
+    cuidador en lugar de N notificaciones individuales.
+
+    SOLO el dueño de los medicamentos puede registrar tomas.
+    """
+    try:
+        service = MedicationService(db)
+
+        # Validate ownership of every medication first; fail fast if any
+        # belongs to another user.
+        med_docs: dict = {}
+        for item in batch.medications:
+            doc = await service.get_medication_raw(item.medication_id)
+            if not doc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Medicamento no encontrado: {item.medication_id}",
+                )
+            if doc.get("userId") != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Solo el paciente puede marcar sus medicamentos como tomados",
+                )
+            med_docs[item.medication_id] = doc
+
+        # Record every take.
+        recorded_takes: List[dict] = []
+        recorded_meds: List[dict] = []
+        for item in batch.medications:
+            doc = med_docs[item.medication_id]
+            scheduled = item.scheduled_time or batch.scheduled_time
+            take = await service.take_medication(
+                medication_id=item.medication_id,
+                user_id=user_id,
+                taken_at=batch.taken_at,
+                notes=item.notes,
+                scheduled_time=scheduled,
+            )
+            if take:
+                recorded_takes.append(take)
+                recorded_meds.append({
+                    "medication_id": item.medication_id,
+                    "name": doc.get("name", ""),
+                    "dosage": doc.get("dosage", ""),
+                })
+
+        # Fire ONE batched event for the caregiver.
+        if recorded_meds:
+            try:
+                from src.domains.events.services import BiometricEventService
+                from src.domains.events.schemas import BiometricEventType
+                event_service = BiometricEventService(db)
+                await event_service.register_biometric_event(
+                    patient_id=user_id,
+                    event_type=BiometricEventType.MEDICATION_TAKEN_BATCH.value,
+                    payload={
+                        "scheduled_time": batch.scheduled_time or "",
+                        "count": len(recorded_meds),
+                        "medications": recorded_meds,
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to register batched medication-taken event: {e}"
+                )
+
+        return {"takes": recorded_takes, "count": len(recorded_takes)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error recording medication take batch: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

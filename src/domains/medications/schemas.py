@@ -145,6 +145,44 @@ class MedicationTakeResponse(BaseModel):
     createdAt: Optional[datetime] = None
 
 
+class TakeMedicationItem(BaseModel):
+    """Una toma individual dentro de un batch"""
+    medication_id: str = Field(..., alias="medicationId")
+    scheduled_time: Optional[str] = Field(
+        None,
+        alias="scheduledTime",
+        description="Horario programado al que corresponde esta toma (HH:MM)",
+    )
+    notes: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+
+
+class TakeMedicationBatch(BaseModel):
+    """Request para registrar la toma de varios medicamentos a la vez"""
+    medications: List[TakeMedicationItem] = Field(..., min_length=1)
+    taken_at: Optional[datetime] = Field(
+        None,
+        alias="takenAt",
+        description="Fecha/hora compartida de la toma. Si no se especifica, usa el momento actual",
+    )
+    scheduled_time: Optional[str] = Field(
+        None,
+        alias="scheduledTime",
+        description="Slot horario común (HH:MM) cuando todos los items pertenecen al mismo horario",
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class TakeMedicationBatchResponse(BaseModel):
+    """Respuesta de toma en batch"""
+    takes: List[MedicationTakeResponse]
+    count: int
+
+
 class MedicationWithTakes(BaseModel):
     """Medicamento con sus tomas del día"""
     medication: MedicationResponse

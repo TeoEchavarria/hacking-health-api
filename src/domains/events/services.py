@@ -113,6 +113,38 @@ def build_event_message(event_type: str, payload: Dict[str, Any]) -> str:
         suffix = f" (programado a las {scheduled})" if scheduled else ""
         return f"Aún no se ha tomado {med_name}{suffix}"
 
+    elif event_type == BiometricEventType.MEDICATION_TAKEN_BATCH.value:
+        meds = payload.get("medications") or []
+        count = payload.get("count") or len(meds)
+        scheduled = payload.get("scheduled_time", "")
+        names = ", ".join(
+            (m.get("name") or "").strip() for m in meds if m.get("name")
+        )
+        time_suffix = f" a las {scheduled}" if scheduled else ""
+        if count <= 1:
+            single = meds[0] if meds else {}
+            single_name = single.get("name", "un medicamento")
+            dosage = (single.get("dosage") or "").strip()
+            dose_suffix = f" ({dosage})" if dosage else ""
+            return f"Tomó {single_name}{dose_suffix}{time_suffix}"
+        names_suffix = f": {names}" if names else ""
+        return f"Se tomaron {count} medicamentos{time_suffix}{names_suffix}"
+
+    elif event_type == BiometricEventType.MEDICATION_MISSED_BATCH.value:
+        meds = payload.get("medications") or []
+        count = payload.get("count") or len(meds)
+        scheduled = payload.get("scheduled_time", "")
+        names = ", ".join(
+            (m.get("name") or "").strip() for m in meds if m.get("name")
+        )
+        time_suffix = f" (programados a las {scheduled})" if scheduled else ""
+        if count <= 1:
+            single = meds[0] if meds else {}
+            single_name = single.get("name", "un medicamento")
+            return f"Aún no se ha tomado {single_name}{time_suffix}"
+        names_suffix = f": {names}" if names else ""
+        return f"No se han tomado {count} medicamentos{time_suffix}{names_suffix}"
+
     return "Evento registrado"
 
 
@@ -188,6 +220,12 @@ def resolve_severity(event_type: str, payload: Dict[str, Any]) -> str:
         return EventSeverity.INFO.value
 
     elif event_type == BiometricEventType.MEDICATION_MISSED.value:
+        return EventSeverity.WARNING.value
+
+    elif event_type == BiometricEventType.MEDICATION_TAKEN_BATCH.value:
+        return EventSeverity.INFO.value
+
+    elif event_type == BiometricEventType.MEDICATION_MISSED_BATCH.value:
         return EventSeverity.WARNING.value
 
     return EventSeverity.INFO.value

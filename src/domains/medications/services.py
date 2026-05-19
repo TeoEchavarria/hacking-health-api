@@ -276,14 +276,15 @@ class MedicationService:
         grace_minutes: int = 30,
     ) -> None:
         """
-        Look at today's medications for the patient and, for each scheduled
-        time whose moment + grace period has passed without enough takes
-        recorded, register a MEDICATION_MISSED biometric event so the
-        caregiver gets a single push per (medication, scheduled-time, day).
+        Look at today's medications and, for each scheduled slot whose moment
+        + grace period has passed without enough takes recorded, register a
+        SINGLE batched MEDICATION_MISSED_BATCH biometric event grouping all
+        the medications pending for that slot. The caregiver receives one
+        push per (slot, day), not one per pending pill.
 
-        Dedup is enforced via a per-time map on the medication document
-        (`missedAlertsByTime`) so callers can invoke this method on every
-        list refresh without spamming.
+        Dedup is enforced via the per-medication `missedAlertsByTime` map
+        with key `YYYY-MM-DD:HH:MM` so callers can invoke this method on
+        every list refresh without spamming.
         """
         from src.domains.events.services import BiometricEventService
         from src.domains.events.schemas import BiometricEventType
@@ -294,6 +295,9 @@ class MedicationService:
         now = datetime.utcnow()
         today_str = now.strftime("%Y-%m-%d")
         event_service = BiometricEventService(self.db)
+
+        # slot -> list of {med_id, name, dosage}
+        pending_by_slot: dict = {}
 
         for item in medications_with_takes:
             med = item.get("medication") or {}
@@ -316,8 +320,8 @@ class MedicationService:
             missed_map = doc.get("missedAlertsByTime") or {}
 
             for idx, scheduled in enumerate(sorted(scheduled_times)):
-                # If patient already has enough takes for the doses so far,
-                # skip this slot.
+                # If patient already has enough takes to cover slots up to
+                # and including this one, skip.
                 if takes_count > idx:
                     continue
                 try:
@@ -336,26 +340,45 @@ class MedicationService:
                 if missed_map.get(slot_key):
                     continue
 
-                try:
-                    await event_service.register_biometric_event(
-                        patient_id=patient_id,
-                        event_type=BiometricEventType.MEDICATION_MISSED.value,
-                        payload={
-                            "medication_id": med_id,
-                            "medication_name": doc.get("name", ""),
-                            "dosage": doc.get("dosage", ""),
-                            "scheduled_time": scheduled,
-                        },
-                    )
+                pending_by_slot.setdefault(scheduled, []).append({
+                    "med_id": med_id,
+                    "name": doc.get("name", ""),
+                    "dosage": doc.get("dosage", ""),
+                    "slot_key": slot_key,
+                })
+
+        # Fire one batch event per slot that has any pending medications.
+        for scheduled, entries in pending_by_slot.items():
+            if not entries:
+                continue
+            try:
+                await event_service.register_biometric_event(
+                    patient_id=patient_id,
+                    event_type=BiometricEventType.MEDICATION_MISSED_BATCH.value,
+                    payload={
+                        "scheduled_time": scheduled,
+                        "count": len(entries),
+                        "medications": [
+                            {
+                                "medication_id": e["med_id"],
+                                "name": e["name"],
+                                "dosage": e["dosage"],
+                            }
+                            for e in entries
+                        ],
+                    },
+                )
+                # Mark dedup on every medication in this batch.
+                for e in entries:
                     await self.medications.update_one(
-                        {"_id": med_id},
-                        {"$set": {f"missedAlertsByTime.{slot_key}": True}},
+                        {"_id": e["med_id"]},
+                        {"$set": {f"missedAlertsByTime.{e['slot_key']}": True}},
                     )
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to register missed-dose event for {med_id} "
-                        f"at {scheduled}: {e}"
-                    )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to register missed-dose batch event at "
+                    f"{scheduled} for patient {patient_id}: {e}"
+                )
     
     async def get_medications_with_today_status(
         self,
