@@ -210,7 +210,25 @@ def caregiver_client(monkeypatch):
     # Force DEBUG=False so the auth dep doesn't bypass to dev user
     monkeypatch.setattr(settings, "DEBUG", False)
 
-    mock_db = AsyncMock()
+    # Use MagicMock for the DB (sync attribute access) and explicitly set
+    # AsyncMock on methods that the service code awaits. AsyncMock as the root
+    # makes child attribute reassignment unreliable.
+    mock_db = MagicMock()
+    mock_db.pairings = MagicMock()
+    mock_db.users = MagicMock()
+    mock_db.users.find_one = AsyncMock(return_value=None)
+    mock_db.pairings.find_one = AsyncMock(return_value=None)
+    mock_db.pairings.find = MagicMock(return_value=_async_cursor([]))
+    mock_db.blood_pressure_readings = MagicMock()
+    mock_db.blood_pressure_readings.find = MagicMock(return_value=_async_cursor([]))
+    mock_db.health_metrics = MagicMock()
+    mock_db.health_metrics.find = MagicMock(return_value=_async_cursor([]))
+
+    # Some services use subscript access: db["pairings"] instead of db.pairings.
+    # Route both to the same collection mocks.
+    def _getitem(name):
+        return getattr(mock_db, name)
+    mock_db.__getitem__.side_effect = _getitem
 
     def override_db():
         return mock_db
@@ -224,11 +242,14 @@ def caregiver_client(monkeypatch):
     db.connect = MagicMock()
     db.close = MagicMock()
 
-    with TestClient(app) as c:
-        c.mock_db = mock_db
+    # NOTE: do not use `with TestClient(app) as c:` because the context manager
+    # triggers FastAPI's startup lifespan, which tries to connect to MongoDB.
+    c = TestClient(app)
+    c.mock_db = mock_db
+    try:
         yield c
-
-    app.dependency_overrides.clear()
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_caregiver_patients_list_returns_active_pairings(caregiver_client):

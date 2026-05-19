@@ -102,13 +102,19 @@ async def get_patient_bp_history(
         days = 30
 
     service = HealthService(db)
-    readings = await service.get_patient_blood_pressure_readings(
+    bp_result = await service.get_patient_blood_pressure_readings(
         patient_id=patient_id, days=days, limit=limit
     )
 
+    # `bp_result` is a dict {patient_id, patient_name, days_requested,
+    # readings: [...], count}. The caregiver endpoint only exposes the
+    # actual readings list plus the safe patient projection.
+    readings_list = bp_result.get("readings", []) if isinstance(bp_result, dict) else []
+
     return {
         "patient": patient,
-        "readings": readings,
+        "readings": readings_list,
+        "count": len(readings_list),
     }
 
 
