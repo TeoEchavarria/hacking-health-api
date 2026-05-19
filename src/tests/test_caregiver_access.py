@@ -300,6 +300,59 @@ def test_caregiver_steps_history_404_when_patient_missing(caregiver_client):
     assert resp.status_code == 404
 
 
+def test_caregiver_bp_history_response_is_flat_list(caregiver_client):
+    """
+    Regression test: `readings` in the JSON response must be a top-level
+    LIST, not a nested dict. Previously the route was forwarding the full
+    service dict ({patient_id, patient_name, readings:[...], count})
+    under the `readings` key, which broke the Android client.
+    """
+    caregiver_client.mock_db.users.find_one = AsyncMock(return_value={
+        "_id": ObjectId(PATIENT_ID),
+        "name": "Carmen",
+    })
+    caregiver_client.mock_db.pairings.find_one = AsyncMock(return_value={
+        "_id": ObjectId(),
+        "caregiverId": CAREGIVER_ID,
+        "patientId": PATIENT_ID,
+        "status": "active",
+    })
+    # Mock blood_pressure_readings cursor with one document.
+    caregiver_client.mock_db.blood_pressure_readings.find = MagicMock(
+        return_value=_async_cursor([
+            {
+                "_id": ObjectId(),
+                "userId": PATIENT_ID,
+                "systolic": 122,
+                "diastolic": 80,
+                "pulse": 72,
+                "timestamp": "2026-05-19T10:00:00",
+                "date": "2026-05-19",
+                "source": "voice",
+                "stage": "normal",
+                "severity": "normal",
+                "crisis_flag": False,
+            }
+        ])
+    )
+
+    resp = caregiver_client.get(f"/caregiver/patients/{PATIENT_ID}/history/bp")
+    assert resp.status_code == 200
+    data = resp.json()
+    # readings MUST be a JSON array
+    assert isinstance(data["readings"], list), \
+        f"Expected list, got {type(data['readings']).__name__}: {data['readings']}"
+    assert data["count"] == len(data["readings"])
+    # patient projection still sanitised
+    assert "email" not in data["patient"]
+    assert "password" not in data["patient"]
+    # If at least one reading is returned its shape exposes the BP fields.
+    if data["readings"]:
+        r = data["readings"][0]
+        assert "systolic" in r
+        assert "diastolic" in r
+
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
