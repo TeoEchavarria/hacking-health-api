@@ -43,17 +43,20 @@ def create_access_token(
     user_id: str,
     email: Optional[str] = None,
     scopes: Optional[list] = None,
-    expires_delta: Optional[timedelta] = None
+    expires_delta: Optional[timedelta] = None,
+    role: Optional[str] = None
 ) -> str:
     """
     Create a JWT access token for a user.
-    
+
     Args:
         user_id: The unique identifier of the user
         email: User's email address
         scopes: List of permission scopes
         expires_delta: Custom expiration time (default: 15 minutes)
-    
+        role: User role at token-issue time ("caregiver" | "patient" | "none").
+              Inferred from active pairings at login; stale until next refresh.
+
     Returns:
         Encoded JWT access token string
     """
@@ -75,7 +78,10 @@ def create_access_token(
     
     if email:
         payload["email"] = email
-    
+
+    if role:
+        payload["role"] = role
+
     if scopes:
         payload["scopes"] = scopes
     else:

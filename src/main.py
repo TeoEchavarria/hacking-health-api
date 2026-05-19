@@ -11,6 +11,7 @@ from src.domains.notifications.routes import router as notifications_router
 from src.domains.location.routes import router as location_router
 from src.domains.drawing_challenges.routes import router as drawing_challenges_router
 from src.domains.events.routes import router as events_router
+from src.domains.caregiver.routes import router as caregiver_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -194,6 +195,7 @@ app.include_router(notifications_router)
 app.include_router(location_router)
 app.include_router(drawing_challenges_router)
 app.include_router(events_router)
+app.include_router(caregiver_router)
 
 @app.get("/")
 async def root():

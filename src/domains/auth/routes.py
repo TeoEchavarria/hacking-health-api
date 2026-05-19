@@ -26,6 +26,37 @@ router = APIRouter(tags=["auth"])
 
 
 # =============================================================================
+# Role Resolution Helper
+# =============================================================================
+
+async def _resolve_user_role(user_id: str, db) -> str:
+    """
+    Infer the user's role from their active pairings.
+
+    Returns "caregiver" if user has any active caregiver pairings,
+    "patient" if they have active patient pairings, else "none".
+    Caregiver takes priority when both exist.
+
+    Embedded in the JWT at token-issue time; refreshed on each new
+    access token (login, oauth, refresh).
+    """
+    # Local import to avoid circular dependency at module load
+    from src.domains.pairing.services import PairingService
+    try:
+        pairing_service = PairingService(db)
+        caregiver_pairings = await pairing_service.get_user_pairings(user_id, role="caregiver")
+        if caregiver_pairings:
+            return "caregiver"
+        patient_pairings = await pairing_service.get_user_pairings(user_id, role="patient")
+        if patient_pairings:
+            return "patient"
+        return "none"
+    except Exception as e:
+        logger.warning(f"[ROLE] Failed to resolve role for user {user_id}: {e}")
+        return "none"
+
+
+# =============================================================================
 # OpenWearables Integration Helper
 # =============================================================================
 
@@ -352,12 +383,16 @@ async def oauth_token_exchange(
         )
     
     user_id = str(user["_id"])
-    
+
+    # Resolve role from active pairings (caregiver | patient | none)
+    role = await _resolve_user_role(user_id, db)
+
     # Generate JWT tokens
     access_token = create_access_token(
         user_id=user_id,
         email=user_info.email,
-        scopes=["profile", "health:read", "health:write"]
+        scopes=["profile", "health:read", "health:write"],
+        role=role
     )
     
     refresh_token, refresh_expiry = create_refresh_token(user_id=user_id)
@@ -429,8 +464,8 @@ async def login(request: LoginRequest, db=Depends(get_database)):
         # Get the created user for OpenWearables setup
         new_user = await db.users.find_one({"_id": result.inserted_id})
         
-        # Generate JWT tokens
-        access_token = create_access_token(user_id=user_id)
+        # Generate JWT tokens (new user => role=none, no pairings yet)
+        access_token = create_access_token(user_id=user_id, role="none")
         refresh_token, expiry = create_refresh_token(user_id=user_id)
         
         # Get OpenWearables credentials for new user
@@ -461,11 +496,15 @@ async def login(request: LoginRequest, db=Depends(get_database)):
             raise HTTPException(status_code=500, detail='failed to update fcm token')
     
     user_id = str(user['_id'])
-    
+
+    # Resolve role from active pairings (caregiver | patient | none)
+    role = await _resolve_user_role(user_id, db)
+
     # Generate JWT tokens
     access_token = create_access_token(
         user_id=user_id,
-        email=user.get('email')
+        email=user.get('email'),
+        role=role
     )
     refresh_token, expiry = create_refresh_token(user_id=user_id)
     
@@ -504,11 +543,15 @@ async def refresh(request: RefreshRequest, db=Depends(get_database)):
         user = await db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
             raise HTTPException(status_code=403, detail='user not found')
-        
+
+        # Re-resolve role on refresh so stale tokens pick up new pairings
+        role = await _resolve_user_role(user_id, db)
+
         # Generate new tokens
         new_access_token = create_access_token(
             user_id=user_id,
-            email=user.get('email')
+            email=user.get('email'),
+            role=role
         )
         new_refresh_token, expiry = create_refresh_token(user_id=user_id)
         
@@ -528,11 +571,15 @@ async def refresh(request: RefreshRequest, db=Depends(get_database)):
         raise HTTPException(status_code=403, detail='invalid refresh token')
     
     user_id = str(user['_id'])
-    
+
+    # Re-resolve role on refresh so stale tokens pick up new pairings
+    role = await _resolve_user_role(user_id, db)
+
     # Generate new JWT tokens
     new_access_token = create_access_token(
         user_id=user_id,
-        email=user.get('email')
+        email=user.get('email'),
+        role=role
     )
     new_refresh_token, expiry = create_refresh_token(user_id=user_id)
 

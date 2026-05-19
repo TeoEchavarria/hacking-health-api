@@ -107,6 +107,34 @@ class HealthService:
     async def ingest_health_metrics(self, metrics) -> Dict[str, Any]:
         """Ingest health metrics from watch (via phone)."""
         return await self._health_metrics.ingest_health_metrics(metrics)
+
+    async def get_steps_history(
+        self,
+        patient_id: str,
+        date_from=None,
+        date_to=None,
+        limit: int = 30,
+    ) -> Dict[str, Any]:
+        """Steps history for a patient (caregiver/self-read)."""
+        return await self._health_metrics.get_steps_history(
+            patient_id, date_from, date_to, limit
+        )
+
+    async def get_sleep_history(
+        self,
+        patient_id: str,
+        date_from=None,
+        date_to=None,
+        limit: int = 30,
+    ) -> Dict[str, Any]:
+        """Sleep history for a patient (caregiver/self-read)."""
+        return await self._health_metrics.get_sleep_history(
+            patient_id, date_from, date_to, limit
+        )
+
+    async def get_30day_summary(self, patient_id: str) -> Dict[str, Any]:
+        """Rolling 30-day aggregated summary for a patient."""
+        return await self._health_metrics.get_30day_summary(patient_id)
     
     # =========================================
     # Sync Management - Delegate to SyncService
