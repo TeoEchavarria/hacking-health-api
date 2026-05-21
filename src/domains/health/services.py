@@ -51,9 +51,13 @@ class HealthService:
         with AuthorizationService.verify_patient_access().
         """
         # Import here to avoid circular dependency
-        from src.core.authorization import get_authorization_service
-        
-        auth_service = get_authorization_service(self.db)
+        from src.core.authorization import AuthorizationService
+        from src.infrastructure.repositories.mongo_pairing_repository import (
+            MongoPairingRepository,
+        )
+
+        pairing_repo = MongoPairingRepository(self.db)
+        auth_service = AuthorizationService(pairing_repo)
         return await auth_service.verify_patient_access(requester_id, patient_id)
     
     # =========================================
