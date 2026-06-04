@@ -4,7 +4,9 @@ Routes for biometric events.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from src.domains.events.schemas import (
     EventsListResponse,
-    UnreadCountResponse
+    UnreadCountResponse,
+    ManualAlertRequest,
+    BiometricEventType,
 )
 from src.domains.events.services import BiometricEventService
 from src.domains.auth.routes import verify_token_jwt
@@ -76,4 +78,39 @@ async def get_unread_count(
         raise HTTPException(
             status_code=500,
             detail="Error al obtener el conteo de no leídos"
+        )
+
+
+@router.post("/manual-alert")
+async def create_manual_alert(
+    body: ManualAlertRequest,
+    user_id: str = Depends(verify_token_jwt),
+    db=Depends(get_database)
+):
+    """
+    Patient-triggered manual/emergency alert (the "Urgencia" button).
+
+    Registers a MANUAL_ALERT biometric event for the authenticated patient.
+    register_biometric_event resolves the active pairing and pushes the alert
+    to the caregiver automatically.
+    """
+    try:
+        service = BiometricEventService(db)
+        message = body.message or "🚨 Solicitó ayuda urgente"
+        event = await service.register_biometric_event(
+            patient_id=user_id,
+            event_type=BiometricEventType.MANUAL_ALERT.value,
+            payload={
+                "message": message,
+                "severity": body.severity.value,
+                "source": "emergency_button",
+            },
+        )
+        return {"success": True, "event_id": str(event.get("_id"))}
+
+    except Exception as e:
+        logger.error(f"Error creating manual alert for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Error al enviar la alerta de urgencia"
         )

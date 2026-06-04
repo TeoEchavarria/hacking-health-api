@@ -83,3 +83,9 @@ class EventsQueryParams(BaseModel):
 class MarkEventsReadRequest(BaseModel):
     """Request to mark specific events as read"""
     event_ids: List[str]
+
+
+class ManualAlertRequest(BaseModel):
+    """Request body for a patient-triggered manual/emergency alert ("Urgencia")."""
+    message: Optional[str] = None
+    severity: EventSeverity = EventSeverity.CRITICAL
