@@ -8,6 +8,7 @@ from bson import ObjectId
 from src._config.logger import get_logger
 from src.domains.events.models import BiometricEventDB
 from src.domains.events.schemas import BiometricEventType, EventSeverity
+from src.domains.pairing.services import PairingService
 from src.utils.fcm_client import send_health_alert_push
 
 logger = get_logger(__name__)
@@ -231,6 +232,11 @@ def resolve_severity(event_type: str, payload: Dict[str, Any]) -> str:
     return EventSeverity.INFO.value
 
 
+def _is_caregiver_view(event: dict, user_id: str) -> bool:
+    """True if `user_id` is one of the (possibly several) caregivers for this event."""
+    return user_id in (event.get("caregiverIds") or []) or event.get("caregiverId") == user_id
+
+
 class BiometricEventService:
     """Service for managing biometric events."""
     
@@ -259,11 +265,14 @@ class BiometricEventService:
         Returns:
             Created event document with _id
         """
-        # 1. Find active pairing to get caregiver ID
-        caregiver_id = None
-        caregiver_fcm_token = None
+        # 1. Resolve ALL active caregivers for this patient (multi-caregiver
+        #    fan-out) and collect their FCM tokens. Mirrors AlertGenerator so
+        #    every linked caregiver — not just the first — is notified and can
+        #    see the event.
+        caregiver_ids: List[str] = []
+        caregiver_tokens: List[str] = []
         patient_name = None
-        
+
         try:
             # Get patient info for notifications
             patient = await self.db.users.find_one({"_id": ObjectId(patient_id)})
@@ -272,29 +281,21 @@ class BiometricEventService:
                 logger.info(f"[PUSH] Patient found: {patient_id}, name: {patient_name}")
             else:
                 logger.warning(f"[PUSH] Patient NOT found in users: {patient_id}")
-            
-            # Find active pairing
-            pairing = await self.db.pairings.find_one({
-                "patientId": patient_id,
-                "status": "active"
-            })
-            
-            if pairing:
-                logger.info(f"[PUSH] Active pairing found: caregiverId={pairing.get('caregiverId')}")
-                if pairing.get("caregiverId"):
-                    caregiver_id = pairing["caregiverId"]
-                    # Get caregiver's FCM token
-                    caregiver = await self.db.users.find_one({"_id": ObjectId(caregiver_id)})
-                    if caregiver:
-                        caregiver_fcm_token = caregiver.get("fcmToken")
-                        logger.info(f"[PUSH] Caregiver {caregiver_id} has FCM token: {bool(caregiver_fcm_token)}")
-                    else:
-                        logger.warning(f"[PUSH] Caregiver NOT found in users: {caregiver_id}")
-            else:
-                logger.info(f"[PUSH] No active pairing for patient: {patient_id}")
-                    
+
+            # All active caregivers linked to this patient (not just the first).
+            caregiver_ids = await PairingService(self.db).get_patient_caregivers(patient_id)
+            logger.info(f"[PUSH] Active caregivers for patient {patient_id}: {len(caregiver_ids)}")
+            for cg_id in caregiver_ids:
+                try:
+                    caregiver = await self.db.users.find_one({"_id": ObjectId(cg_id)})
+                    token = caregiver.get("fcmToken") if caregiver else None
+                    if token:
+                        caregiver_tokens.append(token)
+                except Exception as ce:
+                    logger.warning(f"[PUSH] Error reading caregiver {cg_id}: {ce}")
+
         except Exception as e:
-            logger.warning(f"[PUSH] Error finding pairing for patient {patient_id}: {e}")
+            logger.warning(f"[PUSH] Error resolving caregivers for patient {patient_id}: {e}")
         
         # 2. Build message and determine severity
         message = build_event_message(event_type, payload)
@@ -307,23 +308,23 @@ class BiometricEventService:
             payload=payload,
             message=message,
             severity=severity,
-            caregiver_id=caregiver_id,
+            caregiver_ids=caregiver_ids,
             recorded_at=recorded_at or datetime.now(timezone.utc)
         )
-        
+
         # 4. Insert into database
         result = await self.collection.insert_one(event_doc)
         event_doc["_id"] = result.inserted_id
-        
+
         logger.info(
             f"Created biometric event: type={event_type}, severity={severity}, "
-            f"patient={patient_id}, caregiver={caregiver_id}"
+            f"patient={patient_id}, caregivers={len(caregiver_ids)}"
         )
         
         # 5. Send push notification to caregiver (fire-and-forget, runs concurrently
         #    so the HTTP response returns immediately and the caregiver gets the
         #    push without waiting for any other downstream awaits to complete).
-        if caregiver_id and caregiver_fcm_token:
+        if caregiver_tokens:
             # Título según severidad
             title_map = {
                 "critical": "🚨 ALERTA CRÍTICA",
@@ -333,12 +334,12 @@ class BiometricEventService:
             push_title = title_map.get(severity, "Nueva alerta de tu persona cuidada")
             push_body = f"{patient_name}: {message}" if patient_name else message
 
-            logger.info(f"[PUSH] Dispatching to caregiver {caregiver_id}: title='{push_title}', body='{push_body[:50]}...'")
+            logger.info(f"[PUSH] Dispatching to {len(caregiver_tokens)} caregiver(s): title='{push_title}', body='{push_body[:50]}...'")
 
             async def _send_push():
                 try:
                     push_result = await send_health_alert_push(
-                        fcm_tokens=[caregiver_fcm_token],
+                        fcm_tokens=caregiver_tokens,
                         alert_type=event_type,
                         title=push_title,
                         body=push_body,
@@ -357,7 +358,7 @@ class BiometricEventService:
             _BACKGROUND_PUSH_TASKS.add(push_task)
             push_task.add_done_callback(_BACKGROUND_PUSH_TASKS.discard)
         else:
-            logger.info(f"[PUSH] Skipping push: caregiver_id={caregiver_id}, has_token={bool(caregiver_fcm_token)}")
+            logger.info(f"[PUSH] Skipping push: no caregiver tokens (caregivers={len(caregiver_ids)})")
         
         return event_doc
     
@@ -380,11 +381,14 @@ class BiometricEventService:
         """
         skip = (page - 1) * limit
         
-        # Query: user is either patient or caregiver
+        # Query: user is the patient, or one of the (possibly several) caregivers.
+        # `caregiverIds` matches new multi-caregiver events; `caregiverId` is kept
+        # for events created before the fan-out change.
         query = {
             "$or": [
                 {"patientId": user_id},
-                {"caregiverId": user_id}
+                {"caregiverId": user_id},
+                {"caregiverIds": user_id},
             ]
         }
         
@@ -401,7 +405,7 @@ class BiometricEventService:
         
         # Collect patient IDs for caregiver view
         for event in events_raw:
-            if event.get("caregiverId") == user_id:
+            if _is_caregiver_view(event, user_id):
                 patient_ids_to_fetch.add(event["patientId"])
         
         # Fetch patient info in batch
@@ -418,9 +422,9 @@ class BiometricEventService:
         
         # Format events
         for event in events_raw:
-            is_caregiver_view = event.get("caregiverId") == user_id
+            is_caregiver_view = _is_caregiver_view(event, user_id)
             patient_info = patient_info_map.get(event["patientId"]) if is_caregiver_view else None
-            events.append(BiometricEventDB.to_response(event, patient_info))
+            events.append(BiometricEventDB.to_response(event, patient_info, requesting_user_id=user_id))
         
         # Mark events as read (bulk update)
         await self._mark_events_as_read(user_id, events_raw)
@@ -451,7 +455,7 @@ class BiometricEventService:
         for event in events:
             if event.get("patientId") == user_id and not event.get("readByPatient"):
                 patient_event_ids.append(event["_id"])
-            elif event.get("caregiverId") == user_id and not event.get("readByCaregiver"):
+            elif _is_caregiver_view(event, user_id) and user_id not in (event.get("readByCaregivers") or []):
                 caregiver_event_ids.append(event["_id"])
         
         # Bulk update for patient reads
@@ -462,11 +466,12 @@ class BiometricEventService:
             )
             logger.debug(f"Marked {len(patient_event_ids)} events as read by patient {user_id}")
         
-        # Bulk update for caregiver reads
+        # Bulk update for caregiver reads: track per-caregiver so one caregiver
+        # reading does not mark the event read for the others.
         if caregiver_event_ids:
             await self.collection.update_many(
                 {"_id": {"$in": caregiver_event_ids}},
-                {"$set": {"readByCaregiver": True}}
+                {"$addToSet": {"readByCaregivers": user_id}}
             )
             logger.debug(f"Marked {len(caregiver_event_ids)} events as read by caregiver {user_id}")
     
@@ -483,7 +488,10 @@ class BiometricEventService:
         count = await self.collection.count_documents({
             "$or": [
                 {"patientId": user_id, "readByPatient": False},
-                {"caregiverId": user_id, "readByCaregiver": False}
+                # New multi-caregiver events: unread if this caregiver isn't in readByCaregivers.
+                {"caregiverIds": user_id, "readByCaregivers": {"$ne": user_id}},
+                # Legacy single-caregiver events.
+                {"caregiverId": user_id, "readByCaregiver": False},
             ]
         })
         return count

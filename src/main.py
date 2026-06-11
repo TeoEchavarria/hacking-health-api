@@ -12,6 +12,7 @@ from src.domains.location.routes import router as location_router
 from src.domains.drawing_challenges.routes import router as drawing_challenges_router
 from src.domains.events.routes import router as events_router
 from src.domains.caregiver.routes import router as caregiver_router
+from src.domains.reports.routes import router as reports_router
 from src._config.logger import setup_logging, get_logger
 from src.middleware.logging import LoggingMiddleware
 from src.core.database import db
@@ -191,6 +192,7 @@ app.include_router(user_router)
 app.include_router(users_router)
 app.include_router(pairing_router)
 app.include_router(medications_router)
+app.include_router(reports_router)
 app.include_router(notifications_router)
 app.include_router(location_router)
 app.include_router(drawing_challenges_router)
