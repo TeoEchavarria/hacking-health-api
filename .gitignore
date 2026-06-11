@@ -213,3 +213,9 @@ firebase-credentials.b64
 # Firebase credentials (DO NOT COMMIT)
 firebase-credentials.json
 firebase-credentials.b64
+
+# Firebase service account keys (DO NOT COMMIT)
+*-firebase-adminsdk-*.json
+
+# Base64 secrets (DO NOT COMMIT)
+*.b64

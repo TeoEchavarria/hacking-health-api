@@ -216,3 +216,25 @@ class CalendarEventsResponse(BaseModel):
     hasMedication: bool
     medicationsTaken: int
     totalMedications: int
+
+
+class VoiceTakeMedicationItem(BaseModel):
+    """Un slot (medicamento + horario) pendiente de una franja, para confirmar por voz."""
+    medicationId: str
+    name: str
+    dosage: str = ""
+    scheduledTime: str  # "HH:MM"
+
+
+class VoiceTakeIntentResponse(BaseModel):
+    """
+    Resultado de interpretar un audio de confirmación de tomas por voz
+    ("ya me tomé las de la mañana"). NO registra nada: devuelve los
+    medicamentos de la franja aún no tomados hoy para que la app los lea
+    de vuelta y el paciente confirme antes de llamar a /take-batch.
+    """
+    transcription: str
+    intent: str  # "confirm_take" | "unknown"
+    franja: Optional[str] = None  # "morning" | "midday" | "night" | "all"
+    confidence: str  # "high" | "low"
+    medications: List[VoiceTakeMedicationItem] = Field(default_factory=list)

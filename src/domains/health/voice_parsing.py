@@ -90,6 +90,38 @@ Set confidence to "low" if:
 - The transcription might not be about blood pressure"""
 
 
+# System prompt for medication-take INTENT extraction (patient confirming pills already taken)
+MED_TAKE_INTENT_PROMPT = """You are a medical assistant for an elderly-care app in Spanish.
+The patient speaks to CONFIRM they already took their pills. Extract their intent and
+which time-of-day group ("franja") they mean.
+
+Time-of-day groups:
+- "morning"  = mañana (e.g. "las de la mañana", "las matutinas", "las del desayuno")
+- "midday"   = mediodía / media tarde / tarde (e.g. "las del mediodía", "las de la tarde", "las del almuerzo")
+- "night"    = noche (e.g. "las de la noche", "las de antes de dormir", "las de la cena")
+- "all"      = todas (e.g. "ya me las tomé todas", "todas mis pastillas")
+
+Rules:
+1. intent = "confirm_take" ONLY if the patient clearly states (past tense) they already took / are confirming pills.
+2. If they speak in future tense ("me las tomo mañana"), ask a question, or it is unclear -> intent = "unknown".
+3. franja = null if no clear time-of-day group is stated. If a specific franja is named, prefer it over "all".
+4. confidence = "high" only when intent is clearly a past-tense confirmation AND a franja (or "all") is clear; otherwise "low".
+
+Output JSON only:
+{ "intent": "confirm_take" | "unknown", "franja": "morning" | "midday" | "night" | "all" | null, "confidence": "high" | "low" }"""
+
+# Keyword fallback maps, used when the OpenAI client is unavailable. Specific
+# franjas are checked before "all" so "todas las de la mañana" -> morning.
+_FRANJA_KEYWORDS = {
+    "morning": ["mañana", "manana", "matutin", "desayun"],
+    "midday": ["mediodía", "mediodia", "medio día", "medio dia", "tarde", "almuerzo", "comida"],
+    "night": ["noche", "dormir", "cena", "acostar"],
+    "all": ["todas", "todos", "toditas", "completas"],
+}
+# Past-tense take confirmations. Present/future ("me las tomo mañana") is left out.
+_TAKE_KEYWORDS = ["tomé", "tome", "tomado", "tomada", "ya me tom", "me las tomé", "ya las tomé"]
+
+
 class VoiceParsingService:
     """Service for parsing BP values from voice transcriptions using OpenAI."""
     
@@ -476,6 +508,82 @@ class VoiceParsingService:
         result["transcription"] = transcription
         result.update(audio_metadata)
 
+        return result
+
+    # ------------------------------------------------------------------
+    # Medication-take intent (sub-flow B): "ya me tomé las de la mañana"
+    # ------------------------------------------------------------------
+
+    def _try_keyword_take_intent(self, text: str) -> dict:
+        """Keyword fallback for take-intent parsing (no OpenAI required)."""
+        lower = (text or "").lower()
+        intent = "confirm_take" if any(k in lower for k in _TAKE_KEYWORDS) else "unknown"
+        franja = None
+        for key in ("morning", "midday", "night", "all"):
+            if any(k in lower for k in _FRANJA_KEYWORDS[key]):
+                franja = key
+                break
+        confidence = "high" if (intent == "confirm_take" and franja) else "low"
+        return {"intent": intent, "franja": franja, "confidence": confidence}
+
+    async def _parse_take_intent_with_llm(self, transcription: str) -> dict:
+        """Use OpenAI to parse the medication-take intent."""
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": MED_TAKE_INTENT_PROMPT},
+                {"role": "user", "content": f"Parse this patient voice transcription:\n\n{transcription}"},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        intent = result.get("intent")
+        franja = result.get("franja")
+        if intent not in ("confirm_take", "unknown"):
+            intent = "unknown"
+        if franja not in ("morning", "midday", "night", "all", None):
+            franja = None
+        return {
+            "intent": intent or "unknown",
+            "franja": franja,
+            "confidence": result.get("confidence", "low"),
+        }
+
+    async def parse_take_intent(self, transcription: str) -> dict:
+        """
+        Parse a voice transcription to detect a medication-take confirmation
+        and its time-of-day group ("franja").
+
+        Returns dict with keys: intent ("confirm_take"|"unknown"), franja
+        ("morning"|"midday"|"night"|"all"|None), confidence ("high"|"low").
+        Falls back to keyword matching when the OpenAI client is unavailable.
+        """
+        if self.client:
+            try:
+                return await self._parse_take_intent_with_llm(transcription)
+            except Exception as e:
+                logger.error(f"LLM take-intent parsing failed, using keyword fallback: {e}")
+        return self._try_keyword_take_intent(transcription)
+
+    async def parse_take_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> dict:
+        """
+        Transcribe audio and parse the medication-take intent in one step.
+
+        Returns dict with: intent, franja, confidence, transcription.
+        """
+        transcription, _audio_metadata = await self.transcribe_audio(
+            audio_content, filename, content_type=content_type
+        )
+        if not transcription:
+            return {"intent": "unknown", "franja": None, "confidence": "low", "transcription": ""}
+        result = await self.parse_take_intent(transcription)
+        result["transcription"] = transcription
         return result
 
 

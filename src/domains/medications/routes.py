@@ -1,7 +1,7 @@
 """
 Rutas para gestión de medicamentos y recordatorios
 """
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, File, UploadFile
 from typing import Optional, List
 from datetime import datetime
 
@@ -16,9 +16,12 @@ from src.domains.medications.schemas import (
     MedicationTakeResponse,
     MedicationWithTakes,
     MonthlyReportResponse,
-    CalendarEventsResponse
+    CalendarEventsResponse,
+    VoiceTakeIntentResponse,
+    VoiceTakeMedicationItem,
 )
 from src.domains.medications.services import MedicationService
+from src.domains.health.voice_parsing import get_voice_parsing_service
 from src.core.database import get_database
 from src.domains.auth.routes import verify_token
 from src._config.logger import get_logger
@@ -549,3 +552,67 @@ async def get_calendar_events(
     except Exception as e:
         logger.error(f"Error getting calendar events: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/parse-take-voice", response_model=VoiceTakeIntentResponse)
+async def parse_take_voice(
+    audio: UploadFile = File(...),
+    user_id: str = Depends(verify_token),
+    db=Depends(get_database),
+):
+    """
+    Interpreta un audio del paciente confirmando tomas por franja
+    ("ya me tomé las de la mañana") y devuelve los medicamentos de esa
+    franja aún NO registrados hoy, para que la app los lea de vuelta y el
+    paciente confirme.
+
+    NO registra tomas: el alta se hace luego con POST /medications/take-batch
+    sobre los items que el paciente confirme.
+    """
+    try:
+        audio_content = await audio.read()
+        if len(audio_content) > 10 * 1024 * 1024:  # 10MB
+            raise HTTPException(status_code=413, detail="Audio demasiado grande (máx 10MB)")
+        if len(audio_content) < 1000:
+            raise HTTPException(status_code=400, detail="Audio vacío o demasiado corto")
+
+        voice_service = get_voice_parsing_service()
+        parsed = await voice_service.parse_take_audio(
+            audio_content,
+            audio.filename or "take.m4a",
+            content_type=audio.content_type,
+        )
+
+        medications: List[VoiceTakeMedicationItem] = []
+        franja = parsed.get("franja")
+        if parsed.get("intent") == "confirm_take" and franja:
+            service = MedicationService(db)
+            pending = await service.resolve_pending_takes_for_franja(user_id, franja)
+            medications = [
+                VoiceTakeMedicationItem(
+                    medicationId=p["medication_id"],
+                    name=p["name"],
+                    dosage=p.get("dosage", ""),
+                    scheduledTime=p["scheduled_time"],
+                )
+                for p in pending
+                if p.get("medication_id") and p.get("scheduled_time")
+            ]
+
+        logger.info(
+            f"parse-take-voice user={user_id} intent={parsed.get('intent')} "
+            f"franja={franja} conf={parsed.get('confidence')} pending={len(medications)}"
+        )
+
+        return VoiceTakeIntentResponse(
+            transcription=parsed.get("transcription", ""),
+            intent=parsed.get("intent", "unknown"),
+            franja=franja,
+            confidence=parsed.get("confidence", "low"),
+            medications=medications,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error parsing take voice: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="No se pudo procesar el audio. Intenta de nuevo.")
