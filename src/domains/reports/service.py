@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 
 from src._config.logger import get_logger
 from src.domains.health.services import HealthService
@@ -41,16 +42,16 @@ def build_patient_report_pdf(data: Dict[str, Any]) -> bytes:
 
     def h1(t):
         pdf.set_font("Helvetica", "B", 18)
-        pdf.cell(0, 11, text=_safe(t), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 11, text=_safe(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def h2(t):
         pdf.ln(3)
         pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 8, text=_safe(t), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 8, text=_safe(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def para(t, size=11, style=""):
         pdf.set_font("Helvetica", style, size)
-        pdf.multi_cell(0, 6, text=_safe(t))
+        pdf.multi_cell(0, 6, text=_safe(t), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     def trow(cells, widths, header=False):
         pdf.set_font("Helvetica", "B" if header else "", 10)
