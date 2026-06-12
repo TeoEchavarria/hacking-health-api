@@ -90,6 +90,57 @@ Set confidence to "low" if:
 - The transcription might not be about blood pressure"""
 
 
+# System prompt for medication-take INTENT extraction (patient confirming pills already taken)
+MED_TAKE_INTENT_PROMPT = """You are a medical assistant for an elderly-care app in Spanish.
+The patient speaks to CONFIRM they already took their pills. Extract their intent and
+which time-of-day group ("franja") they mean.
+
+Time-of-day groups:
+- "morning"  = mañana (e.g. "las de la mañana", "las matutinas", "las del desayuno")
+- "midday"   = mediodía / media tarde / tarde (e.g. "las del mediodía", "las de la tarde", "las del almuerzo")
+- "night"    = noche (e.g. "las de la noche", "las de antes de dormir", "las de la cena")
+- "all"      = todas (e.g. "ya me las tomé todas", "todas mis pastillas")
+
+Rules:
+1. intent = "confirm_take" ONLY if the patient clearly states (past tense) they already took / are confirming pills.
+2. If they speak in future tense ("me las tomo mañana"), ask a question, or it is unclear -> intent = "unknown".
+3. franja = null if no clear time-of-day group is stated. If a specific franja is named, prefer it over "all".
+4. confidence = "high" only when intent is clearly a past-tense confirmation AND a franja (or "all") is clear; otherwise "low".
+
+Output JSON only:
+{ "intent": "confirm_take" | "unknown", "franja": "morning" | "midday" | "night" | "all" | null, "confidence": "high" | "low" }"""
+
+# Keyword fallback maps, used when the OpenAI client is unavailable. Specific
+# franjas are checked before "all" so "todas las de la mañana" -> morning.
+_FRANJA_KEYWORDS = {
+    "morning": ["mañana", "manana", "matutin", "desayun"],
+    "midday": ["mediodía", "mediodia", "medio día", "medio dia", "tarde", "almuerzo", "comida"],
+    "night": ["noche", "dormir", "cena", "acostar"],
+    "all": ["todas", "todos", "toditas", "completas"],
+}
+# Past-tense take confirmations. Present/future ("me las tomo mañana") is left out.
+_TAKE_KEYWORDS = ["tomé", "tome", "tomado", "tomada", "ya me tom", "me las tomé", "ya las tomé"]
+
+
+# System prompt for NEW-medication extraction (sub-flow A: register by voice)
+MED_EXTRACTION_PROMPT = """You extract a NEW medication that a patient or caregiver is registering by voice (Spanish).
+
+Extract:
+- name: the medication name as spoken (brand name or active ingredient), or null if not clearly stated.
+- dosage: the dose with its unit if stated (e.g. "50 mg", "10 ml", "1 tableta"), else "".
+- frequency_text: the frequency exactly as said (e.g. "cada 12 horas", "una vez al dia en la manana"), else "".
+- times: a list of HH:MM (24h) reminder times INFERRED from the frequency:
+    "cada 12 horas" -> ["08:00","20:00"];  "cada 8 horas" -> ["08:00","16:00","00:00"];
+    "en la manana y en la noche" -> ["08:00","20:00"];  "una vez al dia" / "en la manana" -> ["08:00"].
+  Empty list if it cannot be inferred.
+- confidence: "high" only if a name is clearly stated AND a dosage or frequency is present; otherwise "low".
+
+NEVER invent or guess a medication name. If unsure, set name to null and confidence to "low".
+
+Output JSON only:
+{ "name": <string|null>, "dosage": <string>, "frequency_text": <string>, "times": [<string>], "confidence": "high"|"low" }"""
+
+
 class VoiceParsingService:
     """Service for parsing BP values from voice transcriptions using OpenAI."""
     
@@ -476,6 +527,136 @@ class VoiceParsingService:
         result["transcription"] = transcription
         result.update(audio_metadata)
 
+        return result
+
+    # ------------------------------------------------------------------
+    # Medication-take intent (sub-flow B): "ya me tomé las de la mañana"
+    # ------------------------------------------------------------------
+
+    def _try_keyword_take_intent(self, text: str) -> dict:
+        """Keyword fallback for take-intent parsing (no OpenAI required)."""
+        lower = (text or "").lower()
+        intent = "confirm_take" if any(k in lower for k in _TAKE_KEYWORDS) else "unknown"
+        franja = None
+        for key in ("morning", "midday", "night", "all"):
+            if any(k in lower for k in _FRANJA_KEYWORDS[key]):
+                franja = key
+                break
+        confidence = "high" if (intent == "confirm_take" and franja) else "low"
+        return {"intent": intent, "franja": franja, "confidence": confidence}
+
+    async def _parse_take_intent_with_llm(self, transcription: str) -> dict:
+        """Use OpenAI to parse the medication-take intent."""
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": MED_TAKE_INTENT_PROMPT},
+                {"role": "user", "content": f"Parse this patient voice transcription:\n\n{transcription}"},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        intent = result.get("intent")
+        franja = result.get("franja")
+        if intent not in ("confirm_take", "unknown"):
+            intent = "unknown"
+        if franja not in ("morning", "midday", "night", "all", None):
+            franja = None
+        return {
+            "intent": intent or "unknown",
+            "franja": franja,
+            "confidence": result.get("confidence", "low"),
+        }
+
+    async def parse_take_intent(self, transcription: str) -> dict:
+        """
+        Parse a voice transcription to detect a medication-take confirmation
+        and its time-of-day group ("franja").
+
+        Returns dict with keys: intent ("confirm_take"|"unknown"), franja
+        ("morning"|"midday"|"night"|"all"|None), confidence ("high"|"low").
+        Falls back to keyword matching when the OpenAI client is unavailable.
+        """
+        if self.client:
+            try:
+                return await self._parse_take_intent_with_llm(transcription)
+            except Exception as e:
+                logger.error(f"LLM take-intent parsing failed, using keyword fallback: {e}")
+        return self._try_keyword_take_intent(transcription)
+
+    async def parse_take_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> dict:
+        """
+        Transcribe audio and parse the medication-take intent in one step.
+
+        Returns dict with: intent, franja, confidence, transcription.
+        """
+        transcription, _audio_metadata = await self.transcribe_audio(
+            audio_content, filename, content_type=content_type
+        )
+        if not transcription:
+            return {"intent": "unknown", "franja": None, "confidence": "low", "transcription": ""}
+        result = await self.parse_take_intent(transcription)
+        result["transcription"] = transcription
+        return result
+
+    # ------------------------------------------------------------------
+    # Medication registration (sub-flow A): register a NEW medication by
+    # voice. The extracted name is validated against the drug catalog and
+    # read back to the patient before anything is saved.
+    # ------------------------------------------------------------------
+
+    async def _parse_medication_with_llm(self, transcription: str) -> dict:
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": MED_EXTRACTION_PROMPT},
+                {"role": "user", "content": f"Extract the medication from:\n\n{transcription}"},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        times = [t for t in (result.get("times") or []) if isinstance(t, str) and ":" in t]
+        return {
+            "name": result.get("name") or None,
+            "dosage": result.get("dosage") or "",
+            "frequency_text": result.get("frequency_text") or "",
+            "times": times,
+            "confidence": result.get("confidence", "low"),
+        }
+
+    async def parse_medication_intent(self, transcription: str) -> dict:
+        """
+        Extract a new medication's {name, dosage, frequency_text, times,
+        confidence} from a transcription. Requires the LLM; without it returns
+        an empty/low-confidence result (a drug name cannot be reliably
+        extracted by keywords).
+        """
+        if self.client:
+            try:
+                return await self._parse_medication_with_llm(transcription)
+            except Exception as e:
+                logger.error(f"LLM medication extraction failed: {e}")
+        return {"name": None, "dosage": "", "frequency_text": "", "times": [], "confidence": "low"}
+
+    async def parse_medication_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> dict:
+        """Transcribe audio and extract the new medication in one step."""
+        transcription, _meta = await self.transcribe_audio(audio_content, filename, content_type=content_type)
+        if not transcription:
+            return {"name": None, "dosage": "", "frequency_text": "", "times": [], "confidence": "low", "transcription": ""}
+        result = await self.parse_medication_intent(transcription)
+        result["transcription"] = transcription
         return result
 
 

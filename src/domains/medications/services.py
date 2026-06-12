@@ -414,7 +414,55 @@ class MedicationService:
             })
 
         return result
-    
+
+    @staticmethod
+    def _hour_in_franja(hour: int, franja: str) -> bool:
+        """Map an hour (0-23) to a time-of-day franja. Mirrors the Android
+        MedicationReminderCard ranges: morning 05-11, midday 12-17, night 18-04."""
+        if franja == "morning":
+            return 5 <= hour <= 11
+        if franja == "midday":
+            return 12 <= hour <= 17
+        if franja == "night":
+            return hour >= 18 or hour <= 4
+        if franja == "all":
+            return True
+        return False
+
+    async def resolve_pending_takes_for_franja(self, user_id: str, franja: str) -> List[dict]:
+        """
+        Return the scheduled slots (medication + HH:MM) that fall in `franja`
+        and are NOT yet registered as taken today. Used by the voice-take
+        confirmation flow so the patient confirms exactly what gets recorded.
+
+        Each item: {medication_id, name, dosage, scheduled_time}.
+        """
+        if franja not in ("morning", "midday", "night", "all"):
+            return []
+        meds_with_status = await self.get_medications_with_today_status(user_id)
+        pending: List[dict] = []
+        for item in meds_with_status:
+            med = item.get("medication") or {}
+            takes = item.get("takes") or []
+            taken_slots = {t.get("scheduledTime") for t in takes if t.get("scheduledTime")}
+            times = [t for t in (med.get("times") or []) if t and ":" in t]
+            for t in sorted(set(times)):
+                try:
+                    hour = int(t.split(":")[0])
+                except (ValueError, IndexError):
+                    continue
+                if not self._hour_in_franja(hour, franja):
+                    continue
+                if t in taken_slots:
+                    continue
+                pending.append({
+                    "medication_id": med.get("id"),
+                    "name": med.get("name", ""),
+                    "dosage": med.get("dosage", ""),
+                    "scheduled_time": t,
+                })
+        return pending
+
     async def get_monthly_report(
         self,
         user_id: str,

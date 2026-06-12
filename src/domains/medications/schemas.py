@@ -216,3 +216,52 @@ class CalendarEventsResponse(BaseModel):
     hasMedication: bool
     medicationsTaken: int
     totalMedications: int
+
+
+class VoiceTakeMedicationItem(BaseModel):
+    """Un slot (medicamento + horario) pendiente de una franja, para confirmar por voz."""
+    medicationId: str
+    name: str
+    dosage: str = ""
+    scheduledTime: str  # "HH:MM"
+
+
+class VoiceTakeIntentResponse(BaseModel):
+    """
+    Resultado de interpretar un audio de confirmación de tomas por voz
+    ("ya me tomé las de la mañana"). NO registra nada: devuelve los
+    medicamentos de la franja aún no tomados hoy para que la app los lea
+    de vuelta y el paciente confirme antes de llamar a /take-batch.
+    """
+    transcription: str
+    intent: str  # "confirm_take" | "unknown"
+    franja: Optional[str] = None  # "morning" | "midday" | "night" | "all"
+    confidence: str  # "high" | "low"
+    medications: List[VoiceTakeMedicationItem] = Field(default_factory=list)
+
+
+class DrugCandidate(BaseModel):
+    """Un medicamento candidato del catálogo verificado (CUM Colombia o CIMA España)."""
+    name: str
+    activeIngredient: str = ""
+    source: str  # "co" | "es"
+
+
+class VoiceMedicationParseResponse(BaseModel):
+    """
+    Resultado de interpretar un audio para REGISTRAR un medicamento nuevo por
+    voz. NO guarda nada: devuelve los datos extraídos + la validación del
+    nombre contra el catálogo de fármacos, para que la app los lea de vuelta
+    y el paciente/cuidador confirme antes de crear el medicamento.
+    """
+    transcription: str
+    name: Optional[str] = None           # nombre tal como se dijo
+    dosage: str = ""
+    frequencyText: str = ""
+    times: List[str] = Field(default_factory=list)
+    confidence: str = "low"              # "high" | "low"
+    matched: bool = False                # ¿el nombre existe en el catálogo?
+    canonicalName: Optional[str] = None  # nombre oficial del catálogo
+    activeIngredient: Optional[str] = None
+    source: Optional[str] = None         # "co" | "es"
+    candidates: List[DrugCandidate] = Field(default_factory=list)
