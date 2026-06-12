@@ -122,6 +122,25 @@ _FRANJA_KEYWORDS = {
 _TAKE_KEYWORDS = ["tomé", "tome", "tomado", "tomada", "ya me tom", "me las tomé", "ya las tomé"]
 
 
+# System prompt for NEW-medication extraction (sub-flow A: register by voice)
+MED_EXTRACTION_PROMPT = """You extract a NEW medication that a patient or caregiver is registering by voice (Spanish).
+
+Extract:
+- name: the medication name as spoken (brand name or active ingredient), or null if not clearly stated.
+- dosage: the dose with its unit if stated (e.g. "50 mg", "10 ml", "1 tableta"), else "".
+- frequency_text: the frequency exactly as said (e.g. "cada 12 horas", "una vez al dia en la manana"), else "".
+- times: a list of HH:MM (24h) reminder times INFERRED from the frequency:
+    "cada 12 horas" -> ["08:00","20:00"];  "cada 8 horas" -> ["08:00","16:00","00:00"];
+    "en la manana y en la noche" -> ["08:00","20:00"];  "una vez al dia" / "en la manana" -> ["08:00"].
+  Empty list if it cannot be inferred.
+- confidence: "high" only if a name is clearly stated AND a dosage or frequency is present; otherwise "low".
+
+NEVER invent or guess a medication name. If unsure, set name to null and confidence to "low".
+
+Output JSON only:
+{ "name": <string|null>, "dosage": <string>, "frequency_text": <string>, "times": [<string>], "confidence": "high"|"low" }"""
+
+
 class VoiceParsingService:
     """Service for parsing BP values from voice transcriptions using OpenAI."""
     
@@ -583,6 +602,60 @@ class VoiceParsingService:
         if not transcription:
             return {"intent": "unknown", "franja": None, "confidence": "low", "transcription": ""}
         result = await self.parse_take_intent(transcription)
+        result["transcription"] = transcription
+        return result
+
+    # ------------------------------------------------------------------
+    # Medication registration (sub-flow A): register a NEW medication by
+    # voice. The extracted name is validated against the drug catalog and
+    # read back to the patient before anything is saved.
+    # ------------------------------------------------------------------
+
+    async def _parse_medication_with_llm(self, transcription: str) -> dict:
+        response = await self.client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": MED_EXTRACTION_PROMPT},
+                {"role": "user", "content": f"Extract the medication from:\n\n{transcription}"},
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+        result = json.loads(response.choices[0].message.content)
+        times = [t for t in (result.get("times") or []) if isinstance(t, str) and ":" in t]
+        return {
+            "name": result.get("name") or None,
+            "dosage": result.get("dosage") or "",
+            "frequency_text": result.get("frequency_text") or "",
+            "times": times,
+            "confidence": result.get("confidence", "low"),
+        }
+
+    async def parse_medication_intent(self, transcription: str) -> dict:
+        """
+        Extract a new medication's {name, dosage, frequency_text, times,
+        confidence} from a transcription. Requires the LLM; without it returns
+        an empty/low-confidence result (a drug name cannot be reliably
+        extracted by keywords).
+        """
+        if self.client:
+            try:
+                return await self._parse_medication_with_llm(transcription)
+            except Exception as e:
+                logger.error(f"LLM medication extraction failed: {e}")
+        return {"name": None, "dosage": "", "frequency_text": "", "times": [], "confidence": "low"}
+
+    async def parse_medication_audio(
+        self,
+        audio_content: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> dict:
+        """Transcribe audio and extract the new medication in one step."""
+        transcription, _meta = await self.transcribe_audio(audio_content, filename, content_type=content_type)
+        if not transcription:
+            return {"name": None, "dosage": "", "frequency_text": "", "times": [], "confidence": "low", "transcription": ""}
+        result = await self.parse_medication_intent(transcription)
         result["transcription"] = transcription
         return result
 

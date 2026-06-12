@@ -19,8 +19,11 @@ from src.domains.medications.schemas import (
     CalendarEventsResponse,
     VoiceTakeIntentResponse,
     VoiceTakeMedicationItem,
+    VoiceMedicationParseResponse,
+    DrugCandidate,
 )
 from src.domains.medications.services import MedicationService
+from src.domains.medications.drug_catalog import DrugCatalogService
 from src.domains.health.voice_parsing import get_voice_parsing_service
 from src.core.database import get_database
 from src.domains.auth.routes import verify_token
@@ -615,4 +618,72 @@ async def parse_take_voice(
         raise
     except Exception as e:
         logger.error(f"Error parsing take voice: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="No se pudo procesar el audio. Intenta de nuevo.")
+
+
+@router.post("/parse-voice", response_model=VoiceMedicationParseResponse)
+async def parse_medication_voice(
+    audio: UploadFile = File(...),
+    user_id: str = Depends(verify_token),
+):
+    """
+    Interpreta un audio para REGISTRAR un medicamento nuevo por voz. Extrae
+    nombre/dosis/frecuencia con Whisper + LLM, valida el nombre contra el
+    catalogo de farmacos (CUM de INVIMA en Colombia, con fallback a CIMA en
+    Espana) y devuelve todo para confirmar. NO crea el medicamento: el alta se
+    hace luego con POST /medications usando los datos confirmados.
+    """
+    try:
+        audio_content = await audio.read()
+        if len(audio_content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Audio demasiado grande (máx 10MB)")
+        if len(audio_content) < 1000:
+            raise HTTPException(status_code=400, detail="Audio vacío o demasiado corto")
+
+        voice_service = get_voice_parsing_service()
+        parsed = await voice_service.parse_medication_audio(
+            audio_content,
+            audio.filename or "med.m4a",
+            content_type=audio.content_type,
+        )
+
+        validation = {
+            "matched": False, "canonical_name": None, "active_ingredient": None,
+            "candidates": [], "source": None,
+        }
+        if parsed.get("name"):
+            validation = await DrugCatalogService().validate(parsed["name"])
+
+        candidates = [
+            DrugCandidate(
+                name=c.get("name", ""),
+                activeIngredient=c.get("active_ingredient", ""),
+                source=c.get("source", ""),
+            )
+            for c in validation.get("candidates", [])
+        ]
+
+        logger.info(
+            f"parse-voice user={user_id} name={parsed.get('name')} "
+            f"matched={validation.get('matched')} source={validation.get('source')} "
+            f"conf={parsed.get('confidence')}"
+        )
+
+        return VoiceMedicationParseResponse(
+            transcription=parsed.get("transcription", ""),
+            name=parsed.get("name"),
+            dosage=parsed.get("dosage", ""),
+            frequencyText=parsed.get("frequency_text", ""),
+            times=parsed.get("times", []),
+            confidence=parsed.get("confidence", "low"),
+            matched=validation.get("matched", False),
+            canonicalName=validation.get("canonical_name"),
+            activeIngredient=validation.get("active_ingredient"),
+            source=validation.get("source"),
+            candidates=candidates,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error parsing medication voice: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="No se pudo procesar el audio. Intenta de nuevo.")
