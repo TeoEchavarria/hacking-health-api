@@ -380,17 +380,25 @@ class BiometricEventService:
             Dict with events list, total count, pagination info
         """
         skip = (page - 1) * limit
-        
-        # Query: user is the patient, or one of the (possibly several) caregivers.
-        # `caregiverIds` matches new multi-caregiver events; `caregiverId` is kept
-        # for events created before the fan-out change.
-        query = {
-            "$or": [
-                {"patientId": user_id},
-                {"caregiverId": user_id},
-                {"caregiverIds": user_id},
-            ]
-        }
+
+        # Patients this user is CURRENTLY an active caregiver for. Caregiver-side
+        # events are scoped to these so a caregiver never sees events from a
+        # patient they are no longer linked to (e.g. a previous patient).
+        active_patient_ids = await PairingService(self.db).get_caregiver_patients(user_id)
+
+        # Query: the user's own events (as patient), plus — only for patients they
+        # actively care for — events where they are a caregiver. `caregiverIds`
+        # matches new multi-caregiver events; `caregiverId` covers legacy ones.
+        or_clauses: List[dict] = [{"patientId": user_id}]
+        if active_patient_ids:
+            or_clauses.append({
+                "patientId": {"$in": active_patient_ids},
+                "$or": [
+                    {"caregiverId": user_id},
+                    {"caregiverIds": user_id},
+                ],
+            })
+        query = {"$or": or_clauses}
         
         # Count total
         total = await self.collection.count_documents(query)
@@ -485,15 +493,20 @@ class BiometricEventService:
         Returns:
             Number of unread events
         """
-        count = await self.collection.count_documents({
-            "$or": [
-                {"patientId": user_id, "readByPatient": False},
+        # Scope caregiver-side unread to patients this user actively cares for,
+        # so events from a previous patient don't inflate the unread badge.
+        active_patient_ids = await PairingService(self.db).get_caregiver_patients(user_id)
+        or_clauses: List[dict] = [
+            {"patientId": user_id, "readByPatient": False},
+        ]
+        if active_patient_ids:
+            or_clauses += [
                 # New multi-caregiver events: unread if this caregiver isn't in readByCaregivers.
-                {"caregiverIds": user_id, "readByCaregivers": {"$ne": user_id}},
+                {"patientId": {"$in": active_patient_ids}, "caregiverIds": user_id, "readByCaregivers": {"$ne": user_id}},
                 # Legacy single-caregiver events.
-                {"caregiverId": user_id, "readByCaregiver": False},
+                {"patientId": {"$in": active_patient_ids}, "caregiverId": user_id, "readByCaregiver": False},
             ]
-        })
+        count = await self.collection.count_documents({"$or": or_clauses})
         return count
 
 

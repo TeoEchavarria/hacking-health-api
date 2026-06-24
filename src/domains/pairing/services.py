@@ -200,14 +200,64 @@ class PairingService:
             f"Pairing activated: {caregiver.get('name')} (caregiver) <-> "
             f"{pairing['patientName']} (patient)"
         )
-        
+
+        # One caregiver → one patient: linking to a new person auto-ends any
+        # OTHER active pairing this caregiver had (e.g. a previous patient).
+        await self._end_other_caregiver_pairings(
+            caregiver_id=caregiver_id,
+            keep_pairing_id=pairing["_id"],
+        )
+
         return {
             "success": True,
             "pairing_id": str(pairing["_id"]),
             "patient_id": pairing["patientId"],
             "patient_name": pairing["patientName"]
         }
-    
+
+    async def _end_other_caregiver_pairings(
+        self,
+        caregiver_id: str,
+        keep_pairing_id,
+    ) -> int:
+        """
+        End every OTHER active pairing where ``caregiver_id`` is the caregiver,
+        keeping only ``keep_pairing_id``.
+
+        Enforces the product rule that a caregiver looks after exactly one
+        person at a time ("auto-replace": linking to a new patient ends the
+        link to the previous one). Sets ``status="ended"`` (excluded from every
+        active-only query) with an audit trail instead of deleting.
+
+        Returns the number of pairings ended.
+        """
+        if not isinstance(keep_pairing_id, ObjectId):
+            try:
+                keep_pairing_id = ObjectId(keep_pairing_id)
+            except Exception:
+                pass
+
+        result = await self.collection.update_many(
+            {
+                "caregiverId": caregiver_id,
+                "status": "active",
+                "_id": {"$ne": keep_pairing_id},
+            },
+            {
+                "$set": {
+                    "status": "ended",
+                    "endedAt": datetime.now(timezone.utc),
+                    "endedReason": "replaced_by_new_pairing",
+                }
+            },
+        )
+        if result.modified_count:
+            logger.info(
+                f"Auto-ended {result.modified_count} previous pairing(s) for "
+                f"caregiver {caregiver_id} (replaced by {keep_pairing_id})"
+            )
+        return result.modified_count
+
     async def get_pairing_status(self, pairing_id: str) -> Dict[str, Any]:
         """
         Get the current status of a pairing.
