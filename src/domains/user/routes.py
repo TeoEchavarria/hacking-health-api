@@ -177,6 +177,93 @@ async def update_fcm_token(
     return {"success": True}
 
 
+# Collections whose documents are OWNED by a single user, keyed by "userId".
+_USER_OWNED_COLLECTIONS = [
+    "blood_pressure_readings",
+    "medications",
+    "medication_takes",
+    "health_metrics",
+    "sensor_batches",
+    "locations",
+]
+
+# Collections that may reference a user under several id fields.
+_USER_MULTIFIELD_COLLECTIONS = {
+    "notifications": ["userId", "patientId", "caregiverId"],
+    "sync_requests": ["userId", "patientId", "caregiverId"],
+    "alerts": ["userId", "patientId", "caregiverId"],
+}
+
+
+async def delete_user_and_data(db, user_id: str) -> dict:
+    """
+    Hard-delete a user and ALL of their data across collections (account + data
+    erasure). Idempotent and scoped to a single user.
+
+    - Health data owned by the user (keyed by ``userId``) is deleted.
+    - Pairings where the user is patient OR caregiver are deleted (ending the
+      relationship for the other party too — their app reconciles on next sync).
+    - The user's OWN biometric events (as patient) are deleted; for events where
+      they were a caregiver of SOMEONE ELSE they are merely unlinked (pulled from
+      ``caregiverIds``/``readByCaregivers``) so that patient keeps their data.
+    - Finally the user document itself is removed (this also drops the embedded
+      refresh-token tracking and ``fcmToken``).
+
+    Returns a per-collection summary of how many docs were affected.
+    """
+    summary: dict = {}
+
+    for coll in _USER_OWNED_COLLECTIONS:
+        res = await db[coll].delete_many({"userId": user_id})
+        summary[coll] = res.deleted_count
+
+    for coll, fields in _USER_MULTIFIELD_COLLECTIONS.items():
+        res = await db[coll].delete_many({"$or": [{f: user_id} for f in fields]})
+        summary[coll] = res.deleted_count
+
+    pairings_res = await db.pairings.delete_many(
+        {"$or": [{"patientId": user_id}, {"caregiverId": user_id}]}
+    )
+    summary["pairings"] = pairings_res.deleted_count
+
+    # Biometric events the user owns as the patient.
+    own_events = await db.biometric_events.delete_many({"patientId": user_id})
+    summary["biometric_events_owned"] = own_events.deleted_count
+    # Events of OTHER patients where this user was a caregiver: just unlink them.
+    unlinked = await db.biometric_events.update_many(
+        {"$or": [{"caregiverIds": user_id}, {"caregiverId": user_id}]},
+        {"$pull": {"caregiverIds": user_id, "readByCaregivers": user_id}},
+    )
+    summary["biometric_events_unlinked"] = unlinked.modified_count
+    await db.biometric_events.update_many(
+        {"caregiverId": user_id}, {"$set": {"caregiverId": None}}
+    )
+
+    # The user document itself.
+    try:
+        user_res = await db.users.delete_one({"_id": ObjectId(user_id)})
+        summary["users"] = user_res.deleted_count
+    except Exception:
+        summary["users"] = 0
+
+    return summary
+
+
+@user_router.delete("/account")
+async def delete_account(
+    user_id: str = Depends(verify_token),
+    db=Depends(get_database),
+):
+    """
+    Permanently delete the authenticated user's account and ALL their data.
+
+    Scoped to the caller (``user_id`` comes from the token), so a user can only
+    ever delete their own account. This is irreversible.
+    """
+    summary = await delete_user_and_data(db, user_id)
+    return {"success": True, "deleted": summary}
+
+
 @user_router.get("/{user_id}", response_model=UserResponse)
 async def get_user_by_id(
     user_id: str,
